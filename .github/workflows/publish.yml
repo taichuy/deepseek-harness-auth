@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      NPM_TOKEN_SECRET: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,13 +49,13 @@ jobs:
           exists=false
           npm view "$name@$version" version >/dev/null 2>&1 && exists=true
           publish=false
-          if [[ "$changed" == true && "$exists" == false && -n "$NODE_AUTH_TOKEN" ]]; then publish=true; fi
+          if [[ "$changed" == true && "$exists" == false && -n "$NPM_TOKEN_SECRET" ]]; then publish=true; fi
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           if [[ "$changed" == false ]]; then echo "Version did not change; skipping publish."; fi
           if [[ "$exists" == true ]]; then echo "$name@$version already exists; skipping publish."; fi
-          if [[ -z "$NODE_AUTH_TOKEN" ]]; then echo "NPM_TOKEN is not configured; skipping publish."; fi
+          if [[ -z "$NPM_TOKEN_SECRET" ]]; then echo "NPM_TOKEN is not configured; skipping publish."; fi
 
       - name: Publish package
         if: steps.release.outputs.publish == 'true'
