@@ -1,0 +1,71 @@
+name: Publish npm
+
+on:
+  push:
+    branches: [main]
+    paths: [package.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+
+      - name: Decide whether this version should publish
+        id: release
+        shell: bash
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          changed=true
+          if [[ "${{ github.event_name }}" == "push" ]] && git cat-file -e HEAD^:package.json 2>/dev/null; then
+            previous=$(git show HEAD^:package.json | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>process.stdout.write(JSON.parse(s).version))")
+            [[ "$previous" != "$version" ]] || changed=false
+          fi
+          exists=false
+          npm view "$name@$version" version >/dev/null 2>&1 && exists=true
+          publish=false
+          if [[ "$changed" == true && "$exists" == false && -n "$NODE_AUTH_TOKEN" ]]; then publish=true; fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          if [[ "$changed" == false ]]; then echo "Version did not change; skipping publish."; fi
+          if [[ "$exists" == true ]]; then echo "$name@$version already exists; skipping publish."; fi
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then echo "NPM_TOKEN is not configured; skipping publish."; fi
+
+      - name: Publish package
+        if: steps.release.outputs.publish == 'true'
+        run: pnpm publish --no-git-checks --provenance
+
+      - name: Create tag and GitHub release
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.release.outputs.version }}"
+          git tag "$tag"
+          git push origin "$tag"
+          gh release create "$tag" --generate-notes --title "$tag"

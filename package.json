@@ -1,0 +1,97 @@
+{
+  "name": "deepseek-harness-auth",
+  "version": "0.1.0",
+  "description": "Fail-closed password authentication proxy bundle for the DeepSeek Harness Web profile",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "authentication",
+    "reverse-proxy"
+  ],
+  "type": "module",
+  "main": "./lib/proxy.js",
+  "types": "./lib/proxy.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/proxy.d.ts",
+      "default": "./lib/proxy.js"
+    },
+    "./center": {
+      "types": "./lib/center.d.ts",
+      "default": "./lib/center.js"
+    },
+    "./password": {
+      "types": "./lib/password.d.ts",
+      "default": "./lib/password.js"
+    },
+    "./state": {
+      "types": "./lib/state.d.ts",
+      "default": "./lib/state.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "dsh-auth": "lib/cli.js"
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.d.ts",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taichuy/deepseek-harness-auth.git"
+  },
+  "bugs": {
+    "url": "https://github.com/taichuy/deepseek-harness-auth/issues"
+  },
+  "homepage": "https://github.com/taichuy/deepseek-harness-auth#readme",
+  "license": "MIT",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/prepare-bin.mjs",
+    "clean": "rm -rf lib coverage",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "check": "pnpm run lint && pnpm run test && pnpm run build && npm pack --dry-run",
+    "prepare": "pnpm run build",
+    "prepack": "pnpm run build"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1 <5",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.2 <1"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.18.1-rc.1",
+    "commander": "^14.0.0",
+    "ipaddr.js": "^2.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "packageManager": "pnpm@10.15.0"
+}

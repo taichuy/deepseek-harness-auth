@@ -1,0 +1,38 @@
+# Public traffic terminates at the authenticated proxy. The Harness carrier
+# stays on a loopback, OS-assigned port so it cannot bypass authentication.
+- id: webserver
+  config:
+    host: 127.0.0.1
+    port: 0
+
+# Suppress the internal loopback URL and model context. The auth proxy owns the
+# public readiness line and optionally publishes publicBaseUrl instead.
+- id: web-runtime
+  config:
+    printUrl: false
+    surfaceContext: false
+    trustedHosts: []
+
+- insert:
+    - id: auth-center
+      name: deepseek-harness-auth/center
+      config:
+        maxAttempts: !!js Number(process.env.DSH_AUTH_MAX_ATTEMPTS ?? 6)
+        lockSeconds: !!js Number(process.env.DSH_AUTH_LOCK_SECONDS ?? 30)
+        sessionTtlSeconds: !!js Number(process.env.DSH_AUTH_SESSION_TTL_SECONDS ?? 86400)
+        captchaMode: !!js process.env.DSH_AUTH_CAPTCHA_MODE ?? 'off'
+        captchaAfterFailures: !!js Number(process.env.DSH_AUTH_CAPTCHA_AFTER_FAILURES ?? 3)
+
+    - id: auth-password
+      name: deepseek-harness-auth/password
+      config:
+        stateDir: !!js process.env.DSH_AUTH_STATE_DIR
+
+    - id: auth-proxy
+      name: deepseek-harness-auth
+      config:
+        host: !!js process.env.DSH_AUTH_HOST ?? '0.0.0.0'
+        port: !!js Number(process.env.DSH_AUTH_PORT ?? 3080)
+        publicBaseUrl: !!js process.env.DSH_AUTH_PUBLIC_URL
+        secureCookie: !!js process.env.DSH_AUTH_SECURE_COOKIE === 'true'
+        trustedProxies: !!js (process.env.DSH_AUTH_TRUSTED_PROXIES ?? '').split(',').map(value => value.trim()).filter(Boolean)
