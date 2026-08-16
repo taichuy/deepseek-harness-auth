@@ -21,6 +21,7 @@ Browser -> public Auth Proxy -> authenticated -> 127.0.0.1:<random> Harness WebS
 - 浏览器仅持有 HttpOnly、SameSite=Strict 的随机会话 token；账号、密码或白名单修改会撤销旧会话。
 - Web 客户端在侧边栏底部提供退出登录，在设置中提供“账号与安全”页面；修改密码必须先验证当前密码，IP 白名单放行本身不能修改凭据。
 - 登录页会读取同一浏览器最近一次已认证 Harness 页面保存的安全主题快照，复用 `--dsw-*` 配色和页面背景。新浏览器首次访问尚无快照时使用随系统明暗变化的 Harness 风格默认主题。
+- 公网浏览器明确确认过 Harness 的同一版“内测声明”后，客户端会按完整声明文案在同源 `localStorage` 中记住确认；刷新或重新登录不再重复打扰，声明文案变化时仍会重新展示。
 - 代理只接受 loopback Harness 上游，并把通过认证的上游 Host 与 Origin 改写为 loopback authority，使 Harness 的本机敏感 RPC 在认证后可用。
 - HTTP 与 HTTPS 都可以使用。插件不会强制 TLS；`secureCookie` 由部署者选择。
 

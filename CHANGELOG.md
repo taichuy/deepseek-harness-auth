@@ -2,6 +2,12 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## 0.2.1 - 2026-08-16
+
+- Capture body-scoped skin variables and allow embedded or remote login background images under CSP.
+- Persist an explicitly acknowledged Harness internal-testing notice in the remote browser and replay it for unchanged copy after reloads.
+- Keep Account & Security password inputs inside their form container under content-box host themes.
+
 ## 0.2.0 - 2026-08-16
 
 - Add a theme-aware login page that reuses the last authenticated Harness skin snapshot in the same browser.

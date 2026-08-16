@@ -30,5 +30,8 @@ describe('installable dsh bundle', () => {
     expect(patch).toContain('name: deepseek-harness-auth/center')
     expect(patch).toContain('name: deepseek-harness-auth/password')
     expect(patch).toContain('name: deepseek-harness-auth\n')
+
+    const clientSource = await readFile(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+    expect(clientSource).toContain('.dsh-auth-section,.dsh-auth-section *{box-sizing:border-box}')
   })
 })

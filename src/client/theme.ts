@@ -13,20 +13,36 @@ const BODY_PROPERTIES = [
   'backgroundRepeat', 'backgroundAttachment', 'color',
 ] as const
 
+interface StyleVariables {
+  readonly length: number
+  item(index: number): string
+  getPropertyValue(name: string): string
+}
+
+/** Merge DSH variables in cascade order; later style views override earlier ones. */
+export function collectThemeVariables(...styles: StyleVariables[]): Record<string, string> {
+  const variables: Record<string, string> = {}
+  for (const style of styles) {
+    for (let index = 0; index < style.length; index += 1) {
+      const name = style.item(index)
+      if (/^--dsw-[a-z0-9-]+$/.test(name)) variables[name] = style.getPropertyValue(name).trim()
+    }
+  }
+  return variables
+}
+
 /** Capture the authenticated shell's effective skin without copying arbitrary markup or scripts. */
 export function captureThemeSnapshot(): ThemeSnapshot {
   const rootStyle = getComputedStyle(document.documentElement)
   const bodyStyle = getComputedStyle(document.body)
-  const variables: Record<string, string> = {}
-  for (let index = 0; index < rootStyle.length; index += 1) {
-    const name = rootStyle.item(index)
-    if (/^--dsw-[a-z0-9-]+$/.test(name)) variables[name] = rootStyle.getPropertyValue(name).trim()
-  }
+  // Root owns the base theme, while third-party skins commonly override the
+  // same tokens on an attributed body selector. Body must be collected last.
+  const variables = collectThemeVariables(rootStyle, bodyStyle)
   const body: Record<string, string> = {}
   for (const property of BODY_PROPERTIES) body[property] = bodyStyle[property]
   return {
     version: 1,
-    colorScheme: rootStyle.colorScheme.includes('dark') ? 'dark' : 'light',
+    colorScheme: bodyStyle.colorScheme.includes('dark') || rootStyle.colorScheme.includes('dark') ? 'dark' : 'light',
     variables,
     body,
   }
@@ -51,7 +67,8 @@ export function persistThemeSnapshot(previous?: string): string | undefined {
 
 /** Keep the login theme synchronized with runtime skin and appearance changes. */
 export function watchTheme(): () => void {
-  let last = localStorage.getItem(THEME_STORAGE_KEY) ?? undefined
+  let last: string | undefined
+  try { last = localStorage.getItem(THEME_STORAGE_KEY) ?? undefined } catch {}
   let timer: number | undefined
   const capture = (): void => { last = persistThemeSnapshot(last) }
   const schedule = (): void => {

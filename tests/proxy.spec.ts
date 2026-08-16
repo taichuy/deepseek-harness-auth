@@ -108,6 +108,7 @@ describe('authenticated proxy composition', () => {
     const loginPage = await fetch(`${target.base}/auth/login`)
     expect(loginPage.headers.get('content-security-policy')).toContain("default-src 'none'")
     expect(loginPage.headers.get('content-security-policy')).toContain("script-src 'self'")
+    expect(loginPage.headers.get('content-security-policy')).toContain("img-src 'self' data:")
     expect(await loginPage.text()).toContain('DeepSeek Harness')
     const themeScript = await fetch(`${target.base}/auth/login-theme.js`)
     expect(themeScript.status).toBe(200)
