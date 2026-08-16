@@ -2,6 +2,10 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## 0.1.2 - 2026-08-16
+
+- Verify the version-driven npm publication workflow from a `main` push.
+
 ## 0.1.1 - 2026-08-16
 
 - Leave manually selected password strength to the local owner; only reject an empty password.
