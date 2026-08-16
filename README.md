@@ -27,23 +27,106 @@ Browser -> public Auth Proxy -> authenticated -> 127.0.0.1:<random> Harness WebS
 
 当前兼容基线为 DeepSeek Harness `0.1.x`（`@deepseek-ai/dsh-host-webserver >=0.1.0-rc.2`）。旧 `0.0.x` WebServer 使用不同的服务名，不在支持范围内。
 
-## 安装
+## 安装与启动
 
-发布到 npm 后：
+以下命令都假定已经安装并能运行 `dsh`。插件只安装到 DSH 的 `web` profile（默认位于 `~/.dsh/profiles/web`），不是安装成系统全局 npm 包，也不会修改 DeepSeek Harness 主仓库。
+
+### 方式一：从 npm 安装（推荐）
+
+npm 包已经包含构建好的 JavaScript，普通用户直接执行：
 
 ```bash
-dsh plugin --profile web add deepseek-harness-auth
-dsh plugin --profile web exec dsh-auth
+dsh plugin --profile web add deepseek-harness-auth@latest
+```
+
+如果需要固定版本，避免以后意外升级：
+
+```bash
+dsh plugin --profile web add deepseek-harness-auth@0.3.0
+```
+
+安装完成后初始化账号并启动 Web 模式：
+
+```bash
+dsh plugin --profile web exec dsh-auth init
 dsh web
 ```
 
-从 GitHub 安装源码版本时，pnpm 10 会要求显式允许依赖的 `prepare` 构建脚本。按照 `dsh plugin` 输出，把 `deepseek-harness-auth: true` 加入 Web profile 的 `pnpm-workspace.yaml#allowBuilds`，然后重新执行：
+`init` 会在终端中交互式询问账号、密码和确认密码，密码不会出现在命令行参数或 shell history 中。浏览器访问终端输出的认证代理地址；默认监听端口是 `3080`。
+
+### 方式二：直接从 GitHub 源码安装
+
+适合测试尚未发布到 npm 的提交。建议锁定 tag 或完整 commit SHA，避免仓库后续更新改变实际安装内容：
 
 ```bash
-dsh plugin --profile web add github:taichuy/deepseek-harness-auth#<commit>
+dsh plugin --profile web add github:taichuy/deepseek-harness-auth#v0.3.0
+# 或：github:taichuy/deepseek-harness-auth#<完整 commit SHA>
 ```
 
-首次启动前运行 `dsh-auth` 初始化账号。密码不会显示在命令行参数或 shell history 中。
+GitHub 安装拿到的是 TypeScript 源码，需要在安装时运行本仓库的 `prepare` 构建脚本。pnpm 10 及以上默认禁止依赖执行构建脚本；如果命令提示构建未被允许，请编辑：
+
+```text
+~/.dsh/profiles/web/pnpm-workspace.yaml
+```
+
+在 `allowBuilds` 下加入：
+
+```yaml
+allowBuilds:
+  deepseek-harness-auth: true
+```
+
+然后重新执行上面的 `dsh plugin ... add github:...` 命令。这个授权允许仓库源码在本机安装阶段执行，因此只应安装可信来源并锁定版本。
+
+### 方式三：从本地源码目录安装（开发者）
+
+适合修改和调试插件。先克隆、安装开发依赖并构建：
+
+```bash
+git clone https://github.com/taichuy/deepseek-harness-auth.git
+cd deepseek-harness-auth
+corepack enable
+pnpm install
+pnpm run build
+```
+
+再把当前源码目录链接到 Web profile。请使用实际绝对路径：
+
+```bash
+dsh plugin --profile web add /absolute/path/to/deepseek-harness-auth
+dsh plugin --profile web exec dsh-auth init
+dsh web
+```
+
+例如本机仓库位于 `/home/taichuy/git/deepseek-harness-auth`：
+
+```bash
+dsh plugin --profile web add /home/taichuy/git/deepseek-harness-auth
+```
+
+源码修改后重新执行 `pnpm run build`，再重启 `dsh web`；本地链接不需要重复安装。
+
+### 升级与卸载
+
+从 npm 升级到最新版：
+
+```bash
+dsh plugin --profile web add deepseek-harness-auth@latest
+```
+
+切换回指定版本：
+
+```bash
+dsh plugin --profile web add deepseek-harness-auth@0.3.0
+```
+
+卸载插件：
+
+```bash
+dsh plugin --profile web remove deepseek-harness-auth
+```
+
+升级或重新安装不会主动删除 `$DSH_HOME/auth` 中已有的账号、密码哈希和 IP 白名单。卸载也只会从 Web profile 移除插件依赖与 Bundle 层，不会删除认证状态文件。
 
 ## 本机管理 CLI
 
