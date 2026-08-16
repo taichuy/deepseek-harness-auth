@@ -137,6 +137,18 @@ git push origin main
 
 - `NPM_TOKEN`：对 `deepseek-harness-auth` 具有 publish 权限的 npm automation/access token。
 
+---
+
+## Friend Links
+
+- [Linux.do](https://linux.do/) - 学AI ，上L站
+- [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness/) - 一切接插件，自由!!!
+- [dsh-web-ui](https://github.com/zhu1090093659/dsh-web-ui) - 好看的dsh web ui
+
+---
+
 ## License
 
-[MIT](LICENSE)
+This project is licensed under the [Apache-2.0](LICENSE) open-source license.
+
+---
