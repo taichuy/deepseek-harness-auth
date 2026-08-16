@@ -12,6 +12,7 @@ Browser -> public Auth Proxy -> authenticated -> 127.0.0.1:<random> Harness WebS
 ```
 
 - 未初始化账号时公共代理保持 fail-closed，不生成默认账号或随机密码。
+- 密码由本机拥有者手动设置；除了不能为空，不强制长度、复杂度或必须排除用户名。
 - 默认白名单为空，因此本机和远程地址都必须登录；可用 CLI 添加 IP 或 CIDR。
 - 密码使用 Node.js `scrypt` 保存，状态目录权限为 `0700`，状态文件为 `0600`。
 - 默认连续失败 6 次锁定 30 秒，同时按“IP + 用户名”和全局 IP 计数。

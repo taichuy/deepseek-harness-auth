@@ -2,6 +2,10 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## 0.1.1 - 2026-08-16
+
+- Leave manually selected password strength to the local owner; only reject an empty password.
+
 ## 0.1.0 - 2026-08-15
 
 - Add the fail-closed public authentication proxy bundle for the Harness Web profile.

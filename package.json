@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-auth",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Fail-closed password authentication proxy bundle for the DeepSeek Harness Web profile",
   "keywords": [
     "deepseek-harness",

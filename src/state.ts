@@ -39,14 +39,14 @@ export function validateUsername(username: string): void {
   }
 }
 
-/** Enforce the built-in strong-password policy. */
-export function validateStrongPassword(password: string, username: string): void {
-  if (password.length < 12 || password.length > 256) throw new Error('password must be 12-256 characters')
-  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter(pattern => pattern.test(password)).length
-  if (classes < 3) throw new Error('password must contain at least three of: lowercase, uppercase, number, symbol')
-  if (password.toLocaleLowerCase().includes(username.toLocaleLowerCase())) {
-    throw new Error('password must not contain the username')
-  }
+/** Require a usable secret while leaving password strength to the local owner. */
+export function validatePassword(password: string): void {
+  if (password.length === 0) throw new Error('password must not be empty')
+}
+
+/** @deprecated Use `validatePassword`; retained for state API compatibility. */
+export function validateStrongPassword(password: string, _username?: string): void {
+  validatePassword(password)
 }
 
 async function derive(password: string, salt: Buffer, cost = SCRYPT_COST, blockSize = SCRYPT_BLOCK_SIZE, parallelization = SCRYPT_PARALLELIZATION): Promise<Buffer> {
@@ -63,7 +63,7 @@ async function derive(password: string, salt: Buffer, cost = SCRYPT_COST, blockS
 /** Build a new durable state and password hash. */
 export async function createState(username: string, password: string, previous?: AuthState): Promise<AuthState> {
   validateUsername(username)
-  validateStrongPassword(password, username)
+  validatePassword(password)
   const salt = randomBytes(16)
   const hash = await derive(password, salt)
   return {

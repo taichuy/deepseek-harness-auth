@@ -2,7 +2,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { AuthStateStore, validateStrongPassword, verifyPassword } from '../src/state.js'
+import { AuthStateStore, validatePassword, validateStrongPassword, verifyPassword } from '../src/state.js'
 
 const roots: string[] = []
 
@@ -39,9 +39,15 @@ describe('auth state', () => {
     expect((await target.revoke()).revision).toBe(4)
   })
 
-  it('rejects weak passwords and username-derived secrets', () => {
-    expect(() => validateStrongPassword('short', 'owner')).toThrow('12-256')
-    expect(() => validateStrongPassword('owner-Is-Strong-42!', 'owner')).toThrow('username')
-    expect(() => validateStrongPassword('alllowercaseletters', 'owner')).toThrow('three')
+  it('accepts owner-chosen passwords without strength restrictions', async () => {
+    expect(() => validatePassword('1')).not.toThrow()
+    expect(() => validatePassword('owner')).not.toThrow()
+    expect(() => validatePassword('alllowercaseletters')).not.toThrow()
+    expect(() => validatePassword('')).toThrow('must not be empty')
+    expect(() => validateStrongPassword('1', 'owner')).not.toThrow()
+
+    const target = await store()
+    const state = await target.reset('owner', '1')
+    expect(await verifyPassword(state, '1')).toBe(true)
   })
 })
