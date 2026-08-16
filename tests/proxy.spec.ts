@@ -36,6 +36,15 @@ async function fixture(): Promise<{ base: string; store: AuthStateStore; upstrea
     observed.host = req.headers.host
     observed.origin = req.headers.origin
     observed.path = req.url
+    if (req.url === '/api/reset') {
+      req.socket.destroy()
+      return
+    }
+    if (req.url === '/api/pluginInventory/list') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ plugins: 'x'.repeat(18 * 1024) }))
+      return
+    }
     res.writeHead(200, { 'content-type': 'text/plain' })
     res.end('upstream-ok')
   })
@@ -268,6 +277,43 @@ describe('authenticated proxy composition', () => {
     expect(authorized.response).toContain('101 Switching Protocols')
     expect(target.upstream.origin).toBe(`http://${target.upstream.host ?? ''}`)
     authorized.socket.destroy()
+  })
+
+  it('survives upstream resets, early client disconnects, and large plugin inventory responses', async () => {
+    const target = await fixture()
+    const login = await fetch(`${target.base}/auth/login`, {
+      method: 'POST',
+      body: new URLSearchParams({ username: 'owner', password: 'Correct-Horse-42!', provider: 'password' }),
+      redirect: 'manual',
+    })
+    const session = sessionCookie(login)
+
+    const reset = await fetch(`${target.base}/api/reset`, { headers: { cookie: session } })
+    expect(reset.status).toBe(502)
+    expect(await reset.text()).toBe('bad gateway')
+
+    const inventory = await fetch(`${target.base}/api/pluginInventory/list`, {
+      method: 'POST',
+      headers: { cookie: session, 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', method: 'pluginInventory/list', payload: { args: {} } }),
+    })
+    const inventoryBody = await inventory.json() as { plugins: string }
+    expect(inventoryBody.plugins).toHaveLength(18 * 1024)
+
+    const port = Number(new URL(target.base).port)
+    const abandonedHttp = connect(port, '127.0.0.1')
+    await once(abandonedHttp, 'connect')
+    abandonedHttp.write('POST /api/pluginInventory/list HTTP/1.1\r\nContent-Length: 9999\r\n\r\npartial')
+    abandonedHttp.destroy()
+
+    const abandonedUpgrade = connect(port, '127.0.0.1')
+    await once(abandonedUpgrade, 'connect')
+    abandonedUpgrade.write('GET /api/events.mux HTTP/1.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n')
+    abandonedUpgrade.destroy()
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    const healthy = await fetch(`${target.base}/auth/login`)
+    expect(healthy.status).toBe(200)
   })
 
   it('refuses a publicly reachable Harness upstream because that would bypass auth', async () => {

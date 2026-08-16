@@ -161,8 +161,19 @@ function upstreamHeaders(req: IncomingMessage, upstreamAuthority: string, source
   return headers
 }
 
+function failBadGateway(res: ServerResponse): void {
+  if (res.destroyed || res.writableEnded) return
+  if (!res.headersSent) {
+    res.writeHead(502)
+    res.end('bad gateway')
+    return
+  }
+  res.destroy()
+}
+
 function proxyHttp(req: IncomingMessage, res: ServerResponse, port: number, sourceIp: string): void {
   const authority = `127.0.0.1:${String(port)}`
+  let upstreamResponse: IncomingMessage | undefined
   const upstream = httpRequest({
     agent: false,
     host: '127.0.0.1',
@@ -170,18 +181,33 @@ function proxyHttp(req: IncomingMessage, res: ServerResponse, port: number, sour
     method: req.method,
     path: req.url,
     headers: upstreamHeaders(req, authority, sourceIp, false),
-  }, (upstreamResponse) => {
-    res.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers)
-    upstreamResponse.pipe(res)
+  }, (response) => {
+    upstreamResponse = response
+    response.once('error', () => failBadGateway(res))
+    response.once('aborted', () => failBadGateway(res))
+    if (res.destroyed || res.writableEnded) {
+      response.destroy()
+      return
+    }
+    res.writeHead(response.statusCode ?? 502, response.headers)
+    response.pipe(res)
   })
-  upstream.on('error', () => {
-    if (!res.headersSent) res.writeHead(502)
-    res.end('bad gateway')
+  const abortUpstream = (): void => {
+    upstream.destroy()
+    upstreamResponse?.destroy()
+  }
+  req.once('aborted', abortUpstream)
+  req.once('error', abortUpstream)
+  res.once('error', abortUpstream)
+  res.once('close', () => {
+    if (!res.writableFinished) abortUpstream()
   })
+  upstream.once('error', () => failBadGateway(res))
   req.pipe(upstream)
 }
 
 function rejectUpgrade(socket: Duplex, status = 401, message = 'Unauthorized'): void {
+  if (socket.destroyed) return
   socket.end(`HTTP/1.1 ${String(status)} ${message}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
 }
 
@@ -212,10 +238,13 @@ function proxyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, port: 
     upstreamSocket.pipe(socket).pipe(upstreamSocket)
   })
   upstream.on('response', response => {
+    response.once('error', () => socket.destroy())
     response.resume()
     rejectUpgrade(socket, response.statusCode ?? 502, response.statusMessage ?? 'Bad Gateway')
   })
   upstream.on('error', () => rejectUpgrade(socket, 502, 'Bad Gateway'))
+  socket.once('close', () => upstream.destroy())
+  socket.once('error', () => upstream.destroy())
   upstream.end()
 }
 
@@ -395,8 +424,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       proxyHttp(req, res, ctx.webServer.port, sourceIp)
     })().catch((error: unknown) => {
       ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
-      if (!res.headersSent) res.writeHead(400)
-      res.end('bad request')
+      if (res.destroyed || res.writableEnded) return
+      if (!res.headersSent) {
+        res.writeHead(400)
+        res.end('bad request')
+      } else {
+        res.destroy()
+      }
     })
   })
 
@@ -405,6 +439,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   server.on('upgrade', (req, socket, head) => {
     upgradedSockets.add(socket)
     socket.once('close', () => upgradedSockets.delete(socket))
+    socket.on('error', () => socket.destroy())
     void (async () => {
       const sourceIp = clientIp(req, trustedProxies)
       const token = cookies(req).get(SESSION_COOKIE)
@@ -414,6 +449,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       }
       proxyUpgrade(req, socket, head, ctx.webServer.port, sourceIp, upgradedSockets)
     })().catch(() => rejectUpgrade(socket, 400, 'Bad Request'))
+  })
+
+  server.on('connection', socket => {
+    socket.on('error', () => socket.destroy())
+  })
+  server.on('clientError', (_error, socket) => {
+    socket.destroy()
   })
 
   await new Promise<void>((resolve, reject) => {

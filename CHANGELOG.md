@@ -2,6 +2,11 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## 0.4.1 - 2026-08-16
+
+- Keep the public proxy alive when clients or the Harness upstream reset HTTP connections.
+- Guard public and upstream sockets throughout WebSocket authentication and handshake handling.
+
 ## 0.4.0 - 2026-08-16
 
 - Add persistent Web controls for disabled, after-failures, and every-login captcha policies.
