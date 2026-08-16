@@ -18,6 +18,9 @@ describe('installable dsh bundle', () => {
     expect(manifest.exports).toHaveProperty('./password')
 
     const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+    expect(patch).toContain('- id: directory-picker\n  disabled: true')
+    expect(patch).toContain("name: '@deepseek-ai/dsh-host-directory-picker-browse'")
+    expect(patch).toContain("name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'")
     expect(patch).toContain('- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0')
     expect(patch).toContain('name: deepseek-harness-auth/center')
     expect(patch).toContain('name: deepseek-harness-auth/password')

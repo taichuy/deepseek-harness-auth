@@ -1,5 +1,17 @@
 # Public traffic terminates at the authenticated proxy. The Harness carrier
 # stays on a loopback, OS-assigned port so it cannot bypass authentication.
+- id: directory-picker
+  disabled: true
+
+# An authenticated public entry can serve remote browsers even though the
+# internal Harness carrier is loopback-only. Pin both faces of Harness's
+# in-app browser so the auto chooser cannot open a dialog on the Host desktop.
+- insert:
+    - id: directory-picker-browse
+      name: '@deepseek-ai/dsh-host-directory-picker-browse'
+    - id: ui-directory-picker-browse
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+
 - id: webserver
   config:
     host: 127.0.0.1
