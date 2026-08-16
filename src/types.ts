@@ -6,6 +6,9 @@ export interface AuthPrincipal {
   provider: string
 }
 
+/** Captcha policy applied to password login attempts. */
+export type CaptchaMode = 'off' | 'always' | 'after-failures'
+
 /** Credentials submitted to one authentication provider. */
 export interface AuthCredentials {
   /** Login name. */
@@ -32,6 +35,10 @@ export interface AuthProvider {
   getIpWhitelist?(principal?: AuthPrincipal): Promise<string[] | undefined>
   /** Replace provider-owned IP/CIDR login bypass rules. */
   replaceIpWhitelist?(rules: string[], principal?: AuthPrincipal): Promise<string[] | undefined>
+  /** Return a persisted provider-owned captcha policy override. */
+  getCaptchaMode?(principal?: AuthPrincipal): Promise<CaptchaMode | undefined>
+  /** Persist a provider-owned captcha policy override. */
+  replaceCaptchaMode?(mode: CaptchaMode, principal?: AuthPrincipal): Promise<CaptchaMode | undefined>
 }
 
 /** Provider-owned result of an authenticated password change. */

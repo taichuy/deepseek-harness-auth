@@ -34,6 +34,8 @@ describe('installable dsh bundle', () => {
     const clientSource = await readFile(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
     expect(clientSource).toContain('.dsh-auth-section,.dsh-auth-section *{box-sizing:border-box}')
     expect(clientSource).toContain('/auth/account/whitelist')
+    expect(clientSource).toContain('/auth/account/captcha')
     expect(clientSource).toContain('保存白名单')
+    expect(clientSource).toContain('保存验证设置')
   })
 })

@@ -2,6 +2,10 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## 0.4.0 - 2026-08-16
+
+- Add persistent Web controls for disabled, after-failures, and every-login captcha policies.
+
 ## 0.3.0 - 2026-08-16
 
 - Add Web management for IP/CIDR login bypass rules in Account & Security, available to account sessions and already-whitelisted visitors.

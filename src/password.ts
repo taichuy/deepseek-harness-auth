@@ -55,6 +55,16 @@ export function apply(ctx: Context, config: Config): void {
       if (state === undefined || (principal !== undefined && (principal.provider !== 'password' || principal.username !== state.username))) return undefined
       return [...(await store.updateWhitelist(() => rules)).whitelist]
     },
+    getCaptchaMode: async (principal) => {
+      const state = await store.read()
+      if (state === undefined || (principal !== undefined && (principal.provider !== 'password' || principal.username !== state.username))) return undefined
+      return state.captchaMode
+    },
+    replaceCaptchaMode: async (mode, principal) => {
+      const state = await store.read()
+      if (state === undefined || (principal !== undefined && (principal.provider !== 'password' || principal.username !== state.username))) return undefined
+      return (await store.updateCaptchaMode(mode)).captchaMode
+    },
   }
   ctx.effect(() => ctx.authCenter.register(provider), 'auth-password: provider')
 }

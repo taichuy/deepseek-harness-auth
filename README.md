@@ -20,6 +20,7 @@ Browser -> public Auth Proxy -> authenticated -> 127.0.0.1:<random> Harness WebS
 - 支持关闭验证码、始终验证、失败后验证；验证码短期有效且只能使用一次。
 - 浏览器仅持有 HttpOnly、SameSite=Strict 的随机会话 token；账号、密码或白名单修改会撤销旧会话。
 - Web 客户端在侧边栏底部提供退出登录，在设置中提供“账号与安全”页面；账号会话和白名单放行的访问者都可以管理 IP/CIDR 白名单，修改密码仍必须先验证当前密码。
+- “账号与安全”页面可以把验证码设为关闭、登录失败后开启或每次登录开启；Web 保存的策略会持久化并覆盖 `DSH_AUTH_CAPTCHA_MODE` 默认值。
 - 登录页会读取同一浏览器最近一次已认证 Harness 页面保存的安全主题快照，复用 `--dsw-*` 配色和页面背景。新浏览器首次访问尚无快照时使用随系统明暗变化的 Harness 风格默认主题。
 - 公网浏览器明确确认过 Harness 的同一版“内测声明”后，客户端会按完整声明文案在同源 `localStorage` 中记住确认；刷新或重新登录不再重复打扰，声明文案变化时仍会重新展示。
 - 代理只接受 loopback Harness 上游，并把通过认证的上游 Host 与 Origin 改写为 loopback authority，使 Harness 的本机敏感 RPC 在认证后可用。
@@ -42,7 +43,7 @@ dsh plugin --profile web add deepseek-harness-auth@latest
 如果需要固定版本，避免以后意外升级：
 
 ```bash
-dsh plugin --profile web add deepseek-harness-auth@0.3.0
+dsh plugin --profile web add deepseek-harness-auth@0.4.0
 ```
 
 安装完成后初始化账号并启动 Web 模式：
@@ -59,7 +60,7 @@ dsh web
 适合测试尚未发布到 npm 的提交。建议锁定 tag 或完整 commit SHA，避免仓库后续更新改变实际安装内容：
 
 ```bash
-dsh plugin --profile web add github:taichuy/deepseek-harness-auth#v0.3.0
+dsh plugin --profile web add github:taichuy/deepseek-harness-auth#v0.4.0
 # 或：github:taichuy/deepseek-harness-auth#<完整 commit SHA>
 ```
 
@@ -117,7 +118,7 @@ dsh plugin --profile web add deepseek-harness-auth@latest
 切换回指定版本：
 
 ```bash
-dsh plugin --profile web add deepseek-harness-auth@0.3.0
+dsh plugin --profile web add deepseek-harness-auth@0.4.0
 ```
 
 卸载插件：
@@ -180,6 +181,8 @@ dsh web
 
 原 Harness `--host`、`--port` 不再代表公共入口：Bundle 会把它的内部 WebServer 固定为 `127.0.0.1:0`，公共监听由上表配置。
 
+`DSH_AUTH_CAPTCHA_MODE` 是账号尚未在 Web 页面保存验证码策略时的初始默认值。一旦从“设置 → 账号与安全”保存，选择结果会写入认证状态并在后续重启时优先生效。
+
 ## 认证提供方架构
 
 `deepseek-harness-auth/center` 提供 `ctx.authCenter` 和 provider registry；`deepseek-harness-auth/password` 是当前内置 provider。每种未来认证方式可以作为独立 Cordis row 注册并通过 profile patch 单独挂载、禁用或替换，不需要修改 Auth Proxy。
@@ -189,6 +192,7 @@ dsh web
 认证后的客户端还使用以下同源端点：
 
 - `GET /auth/account`：返回账号会话或 IP 白名单访问方式。
+- `PUT /auth/account/captcha`：把登录验证码设为 `off`、`after-failures` 或 `always`；账号会话或已命中白名单的访问者均可调用。
 - `PUT /auth/account/whitelist`：替换内置 provider 的 IP/CIDR 白名单；账号会话或已命中白名单的访问者均可调用，修改后撤销旧会话。
 - `POST /auth/account/password`：验证当前密码并修改新密码，成功后撤销全部会话；只接受账号会话和带 `X-DSH-Auth-Request: 1` 的 JSON 请求。
 - `POST /auth/logout`：撤销当前会话并清理 Cookie。

@@ -1,7 +1,7 @@
 import { randomBytes, randomInt } from 'node:crypto'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type { AuthProvider, AuthPrincipal, LoginResult, PasswordChangeResult } from './types.js'
+import type { AuthProvider, AuthPrincipal, CaptchaMode, LoginResult, PasswordChangeResult } from './types.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -18,7 +18,7 @@ export interface Config {
   /** Browser-session lifetime in seconds. */
   sessionTtlSeconds: number
   /** Captcha policy for password attempts. */
-  captchaMode: 'off' | 'always' | 'after-failures'
+  captchaMode: CaptchaMode
   /** Failures before after-failures mode requires a captcha. */
   captchaAfterFailures: number
 }
@@ -110,9 +110,9 @@ export class AuthCenter extends Service {
   }
 
   /** Whether the configured policy currently requires a captcha for this attempt key. */
-  captchaRequired(provider: string, clientIp: string, username: string): boolean {
-    if (this.config.captchaMode === 'always') return true
-    if (this.config.captchaMode === 'off') return false
+  captchaRequired(provider: string, clientIp: string, username: string, mode: CaptchaMode = this.config.captchaMode): boolean {
+    if (mode === 'always') return true
+    if (mode === 'off') return false
     const attempts = Math.max(
       this.failures.get(this.failureKey(provider, clientIp, username))?.attempts ?? 0,
       this.failures.get(this.ipFailureKey(provider, clientIp))?.attempts ?? 0,
@@ -142,7 +142,8 @@ export class AuthCenter extends Service {
     if (lockedUntil > now) {
       return { status: 'locked', retryAfterSeconds: Math.max(1, Math.ceil((lockedUntil - now) / 1000)) }
     }
-    const captchaRequired = this.captchaRequired(request.provider, request.clientIp, request.username)
+    const captchaMode = await this.providerCaptchaMode(provider)
+    const captchaRequired = this.captchaRequired(request.provider, request.clientIp, request.username, captchaMode)
     if (captchaRequired && !this.consumeCaptcha(request.captchaId, request.captchaAnswer)) return { status: 'captcha-required' }
     const principal = await provider.authenticate({ username: request.username, password: request.password })
     if (principal === undefined) {
@@ -156,8 +157,8 @@ export class AuthCenter extends Service {
       this.enforceBound(this.failures, MAX_TRACKED_FAILURES)
       return {
         status: 'invalid',
-        captchaRequired: this.config.captchaMode === 'always'
-          || (this.config.captchaMode === 'after-failures' && attempts >= this.config.captchaAfterFailures),
+        captchaRequired: captchaMode === 'always'
+          || (captchaMode === 'after-failures' && attempts >= this.config.captchaAfterFailures),
       }
     }
     this.failures.delete(key)
@@ -227,6 +228,47 @@ export class AuthCenter extends Service {
       }
     }
     return undefined
+  }
+
+  /** Return the effective captcha mode for a public login provider. */
+  async captchaMode(providerId = 'password'): Promise<CaptchaMode> {
+    const provider = this.providers.get(providerId)
+    return provider === undefined ? this.config.captchaMode : await this.providerCaptchaMode(provider)
+  }
+
+  /** Resolve the captcha policy owned by the authenticated or bypassing provider. */
+  async captchaPolicy(principal: AuthPrincipal | undefined, clientIp: string): Promise<{ provider: string; mode: CaptchaMode } | undefined> {
+    if (principal !== undefined) {
+      const provider = this.providers.get(principal.provider)
+      if (provider === undefined) return undefined
+      return { provider: provider.id, mode: await this.providerCaptchaMode(provider, principal) }
+    }
+    for (const provider of this.providers.values()) {
+      if (provider.replaceCaptchaMode !== undefined && await provider.bypasses(clientIp)) {
+        return { provider: provider.id, mode: await this.providerCaptchaMode(provider) }
+      }
+    }
+    return undefined
+  }
+
+  /** Persist a captcha policy through the provider that authorized this request. */
+  async replaceCaptchaMode(principal: AuthPrincipal | undefined, clientIp: string, mode: CaptchaMode): Promise<{ provider: string; mode: CaptchaMode } | undefined> {
+    if (principal !== undefined) {
+      const provider = this.providers.get(principal.provider)
+      const updated = await provider?.replaceCaptchaMode?.(mode, principal)
+      return updated === undefined ? undefined : { provider: principal.provider, mode: updated }
+    }
+    for (const provider of this.providers.values()) {
+      if (provider.replaceCaptchaMode !== undefined && await provider.bypasses(clientIp)) {
+        const updated = await provider.replaceCaptchaMode(mode)
+        if (updated !== undefined) return { provider: provider.id, mode: updated }
+      }
+    }
+    return undefined
+  }
+
+  private async providerCaptchaMode(provider: AuthProvider, principal?: AuthPrincipal): Promise<CaptchaMode> {
+    return await provider.getCaptchaMode?.(principal) ?? this.config.captchaMode
   }
 
   private consumeCaptcha(id: string | undefined, answer: string | undefined): boolean {

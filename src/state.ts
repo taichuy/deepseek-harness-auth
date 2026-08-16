@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, stat, writeFile, chmod } from 'node:fs/promise
 import { dirname, join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { normalizeIpRule } from './network.js'
+import type { CaptchaMode } from './types.js'
 
 const STATE_FILENAME = 'state.json'
 const SCRYPT_KEY_BYTES = 32
@@ -25,6 +26,8 @@ export interface AuthState {
     parallelization: number
   }
   whitelist: string[]
+  /** Persisted override for the Auth Center's configured captcha mode. */
+  captchaMode?: CaptchaMode
 }
 
 /** Default directory shared by the running provider and `dsh-auth`. */
@@ -79,6 +82,7 @@ export async function createState(username: string, password: string, previous?:
       parallelization: SCRYPT_PARALLELIZATION,
     },
     whitelist: previous?.whitelist ?? [],
+    ...(previous?.captchaMode !== undefined && { captchaMode: previous.captchaMode }),
   }
 }
 
@@ -103,6 +107,7 @@ function parseState(value: unknown): AuthState {
   validateUsername(state.username)
   if (typeof state.password !== 'object' || state.password === null || state.password.algorithm !== 'scrypt') throw new Error('auth state password record is invalid')
   if (!Array.isArray(state.whitelist) || !state.whitelist.every(item => typeof item === 'string')) throw new Error('auth state whitelist is invalid')
+  if (state.captchaMode !== undefined && !['off', 'always', 'after-failures'].includes(state.captchaMode)) throw new Error('auth state captcha mode is invalid')
   return state as AuthState
 }
 
@@ -157,6 +162,16 @@ export class AuthStateStore {
     if (current === undefined) throw new Error('authentication is not initialized; run dsh-auth init first')
     const whitelist = [...new Set(transform(current.whitelist).map(normalizeIpRule))]
     const next = { ...current, revision: current.revision + 1, whitelist }
+    await this.write(next)
+    return next
+  }
+
+  /** Persist the Web-configured captcha mode without revoking active sessions. */
+  async updateCaptchaMode(captchaMode: CaptchaMode): Promise<AuthState> {
+    const current = await this.read()
+    if (current === undefined) throw new Error('authentication is not initialized; run dsh-auth init first')
+    if (current.captchaMode === captchaMode) return current
+    const next = { ...current, captchaMode }
     await this.write(next)
     return next
   }

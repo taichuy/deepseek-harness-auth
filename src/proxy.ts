@@ -248,7 +248,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       }
       if (req.method === 'GET' && url.pathname === '/auth/login') {
         const initialized = await ctx.authCenter.initialized()
-        const captcha = ctx.authCenter.config.captchaMode === 'always' || url.searchParams.has('captcha')
+        const captcha = await ctx.authCenter.captchaMode() === 'always' || url.searchParams.has('captcha')
         writeHtml(res, 200, loginPage({
           initialized,
           captcha,
@@ -316,9 +316,28 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       }
       if (req.method === 'GET' && url.pathname === '/auth/account') {
         const whitelist = await ctx.authCenter.ipWhitelist(principal, sourceIp)
+        const captcha = await ctx.authCenter.captchaPolicy(principal, sourceIp)
         writeJson(res, 200, principal === undefined
-          ? { mode: 'whitelist', clientIp: sourceIp, whitelistProvider: whitelist?.provider, whitelist: whitelist?.rules ?? [] }
-          : { mode: 'session', provider: principal.provider, username: principal.username, clientIp: sourceIp, whitelistProvider: whitelist?.provider, whitelist: whitelist?.rules ?? [] })
+          ? { mode: 'whitelist', clientIp: sourceIp, whitelistProvider: whitelist?.provider, whitelist: whitelist?.rules ?? [], captchaMode: captcha?.mode ?? ctx.authCenter.config.captchaMode, captchaAfterFailures: ctx.authCenter.config.captchaAfterFailures }
+          : { mode: 'session', provider: principal.provider, username: principal.username, clientIp: sourceIp, whitelistProvider: whitelist?.provider, whitelist: whitelist?.rules ?? [], captchaMode: captcha?.mode ?? ctx.authCenter.config.captchaMode, captchaAfterFailures: ctx.authCenter.config.captchaAfterFailures })
+        return
+      }
+      if (req.method === 'PUT' && url.pathname === '/auth/account/captcha') {
+        if (req.headers['x-dsh-auth-request'] !== '1') {
+          writeJson(res, 403, { error: 'auth request header required' })
+          return
+        }
+        const body = await readJson(req)
+        if (body.mode !== 'off' && body.mode !== 'always' && body.mode !== 'after-failures') {
+          writeJson(res, 422, { error: 'mode must be off, always, or after-failures' })
+          return
+        }
+        const updated = await ctx.authCenter.replaceCaptchaMode(principal, sourceIp, body.mode)
+        if (updated === undefined) {
+          writeJson(res, 409, { error: 'the active authentication provider does not expose captcha settings' })
+          return
+        }
+        writeJson(res, 200, { captchaProvider: updated.provider, captchaMode: updated.mode, captchaAfterFailures: ctx.authCenter.config.captchaAfterFailures })
         return
       }
       if (req.method === 'PUT' && url.pathname === '/auth/account/whitelist') {

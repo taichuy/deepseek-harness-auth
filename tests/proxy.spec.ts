@@ -136,6 +136,7 @@ describe('authenticated proxy composition', () => {
     const bypassAccount = await fetch(`${target.base}/auth/account`)
     expect(await bypassAccount.json()).toEqual({
       mode: 'whitelist', clientIp: '127.0.0.1', whitelistProvider: 'password', whitelist: ['127.0.0.1'],
+      captchaMode: 'off', captchaAfterFailures: 3,
     })
     const bypassChange = await fetch(`${target.base}/auth/account/password`, {
       method: 'POST',
@@ -153,6 +154,7 @@ describe('authenticated proxy composition', () => {
     const session = sessionCookie(login)
     expect(await (await fetch(`${target.base}/auth/account`, { headers: { cookie: session } })).json()).toEqual({
       mode: 'session', provider: 'password', username: 'owner', clientIp: '127.0.0.1', whitelistProvider: 'password', whitelist: [],
+      captchaMode: 'off', captchaAfterFailures: 3,
     })
     const rejected = await fetch(`${target.base}/auth/account/password`, {
       method: 'POST',
@@ -211,6 +213,40 @@ describe('authenticated proxy composition', () => {
     expect(sessionUpdate.headers.get('set-cookie')).toContain('Max-Age=0')
     expect(await sessionUpdate.json()).toEqual({ whitelistProvider: 'password', whitelist: ['127.0.0.0/8', '10.0.0.0/24'] })
     expect((await target.store.read())?.whitelist).toEqual(['127.0.0.0/8', '10.0.0.0/24'])
+  })
+
+  it('persists Web captcha settings for account sessions and whitelisted visitors', async () => {
+    const target = await fixture()
+    await target.store.updateWhitelist(() => ['localhost'])
+
+    const missingHeader = await fetch(`${target.base}/auth/account/captcha`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'always' }),
+    })
+    expect(missingHeader.status).toBe(403)
+    const invalid = await fetch(`${target.base}/auth/account/captcha`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-dsh-auth-request': '1' },
+      body: JSON.stringify({ mode: 'sometimes' }),
+    })
+    expect(invalid.status).toBe(422)
+
+    const enabled = await fetch(`${target.base}/auth/account/captcha`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-dsh-auth-request': '1' },
+      body: JSON.stringify({ mode: 'always' }),
+    })
+    expect(await enabled.json()).toEqual({ captchaProvider: 'password', captchaMode: 'always', captchaAfterFailures: 3 })
+    expect((await target.store.read())?.captchaMode).toBe('always')
+    expect(await (await fetch(`${target.base}/auth/login`)).text()).toContain('name="captcha"')
+
+    const afterFailures = await fetch(`${target.base}/auth/account/captcha`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-dsh-auth-request': '1' },
+      body: JSON.stringify({ mode: 'after-failures' }),
+    })
+    expect(afterFailures.status).toBe(200)
+    expect((await target.store.read())?.captchaMode).toBe('after-failures')
+    expect(await (await fetch(`${target.base}/auth/account`)).json()).toMatchObject({ captchaMode: 'after-failures', captchaAfterFailures: 3 })
   })
 
   it('applies whitelist changes live and rejects unauthenticated upgrade handshakes', async () => {
