@@ -2,6 +2,13 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## 0.2.0 - 2026-08-16
+
+- Add a theme-aware login page that reuses the last authenticated Harness skin snapshot in the same browser.
+- Add a Web client bundle with a sidebar sign-out action and an Account & Security settings section.
+- Add authenticated account details and password-change endpoints; password changes verify the current password and revoke all existing sessions.
+- Prevent IP-whitelist bypasses from changing account credentials without an account session.
+
 ## 0.1.3 - 2026-08-16
 
 - Pin authenticated Web profiles to Harness's in-app browse directory picker so remote access never opens a dialog on the Host desktop.

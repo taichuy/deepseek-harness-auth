@@ -26,7 +26,12 @@ export interface AuthProvider {
   bypasses(clientIp: string): Promise<boolean>
   /** Verify credentials without revealing which field failed. */
   authenticate(credentials: AuthCredentials): Promise<AuthPrincipal | undefined>
+  /** Replace the current account password after re-authenticating the principal. */
+  changePassword?(principal: AuthPrincipal, currentPassword: string, newPassword: string): Promise<PasswordChangeResult>
 }
+
+/** Provider-owned result of an authenticated password change. */
+export type PasswordChangeResult = 'ok' | 'invalid-current' | 'unsupported'
 
 /** Result of one browser login attempt. */
 export type LoginResult =

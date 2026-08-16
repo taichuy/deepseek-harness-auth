@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { defaultStateDir, AuthStateStore, verifyPassword } from './state.js'
+import { defaultStateDir, AuthStateStore, validatePassword, verifyPassword } from './state.js'
 import { ipMatches } from './network.js'
 import type { AuthProvider } from './types.js'
 import type {} from './center.js'
@@ -34,6 +34,16 @@ export function apply(ctx: Context, config: Config): void {
       const passwordMatches = await verifyPassword(state, credentials.password)
       if (credentials.username !== state.username || !passwordMatches) return undefined
       return { username: state.username, provider: 'password' }
+    },
+    changePassword: async (principal, currentPassword, newPassword) => {
+      if (principal.provider !== 'password') return 'unsupported'
+      const state = await store.read()
+      if (state === undefined || principal.username !== state.username || !await verifyPassword(state, currentPassword)) {
+        return 'invalid-current'
+      }
+      validatePassword(newPassword)
+      await store.reset(state.username, newPassword)
+      return 'ok'
     },
   }
   ctx.effect(() => ctx.authCenter.register(provider), 'auth-password: provider')

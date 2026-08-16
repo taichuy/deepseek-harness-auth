@@ -76,4 +76,13 @@ describe('Auth Center', () => {
     setRevision(2)
     expect(await auth.session(result.token)).toBeUndefined()
   })
+
+  it('dispatches password changes only to the principal provider', async () => {
+    const { center: auth, provider } = await center()
+    provider.changePassword = async (principal, currentPassword, newPassword) =>
+      principal.username === 'owner' && currentPassword === 'correct' && newPassword === 'new' ? 'ok' : 'invalid-current'
+    expect(await auth.changePassword({ provider: 'password', username: 'owner' }, 'wrong', 'new')).toBe('invalid-current')
+    expect(await auth.changePassword({ provider: 'password', username: 'owner' }, 'correct', 'new')).toBe('ok')
+    expect(await auth.changePassword({ provider: 'missing', username: 'owner' }, 'correct', 'new')).toBe('unsupported')
+  })
 })

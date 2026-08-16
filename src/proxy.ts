@@ -10,7 +10,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from './center.js'
-import { captchaSvg, loginPage } from './html.js'
+import { captchaSvg, loginPage, loginThemeScript } from './html.js'
 import { normalizeIpRule, resolveClientIp } from './network.js'
 
 /** Stable Cordis plugin name. */
@@ -99,16 +99,42 @@ async function readForm(req: IncomingMessage): Promise<URLSearchParams> {
   return new URLSearchParams(Buffer.concat(chunks).toString('utf8'))
 }
 
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) throw new Error('JSON content type required')
+  let size = 0
+  const chunks: Buffer[] = []
+  for await (const chunk of req) {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    size += value.length
+    if (size > MAX_LOGIN_BODY_BYTES) throw new Error('auth body exceeds 16 KiB')
+    chunks.push(value)
+  }
+  const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('JSON object required')
+  return parsed as Record<string, unknown>
+}
+
 function writeHtml(res: ServerResponse, status: number, body: string, headers?: Record<string, string | string[]>): void {
   res.writeHead(status, {
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'no-store',
-    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer',
     ...headers,
   })
   res.end(body)
+}
+
+function writeJson(res: ServerResponse, status: number, body?: unknown, headers?: Record<string, string | string[]>): void {
+  const payload = body === undefined ? '' : JSON.stringify(body)
+  res.writeHead(status, {
+    ...(body === undefined ? {} : { 'content-type': 'application/json; charset=utf-8' }),
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    ...headers,
+  })
+  res.end(payload)
 }
 
 function redirect(res: ServerResponse, location: string, headers?: Record<string, string | string[]>): void {
@@ -210,6 +236,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       const sourceIp = clientIp(req, trustedProxies)
       const url = new URL(req.url ?? '/', 'http://auth.local')
       const requestCookies = cookies(req)
+      if (req.method === 'GET' && url.pathname === '/auth/login-theme.js') {
+        res.writeHead(200, {
+          'content-type': 'text/javascript; charset=utf-8',
+          'cache-control': 'no-store',
+          'content-security-policy': "default-src 'none'",
+          'x-content-type-options': 'nosniff',
+        })
+        res.end(loginThemeScript)
+        return
+      }
       if (req.method === 'GET' && url.pathname === '/auth/login') {
         const initialized = await ctx.authCenter.initialized()
         const captcha = ctx.authCenter.config.captchaMode === 'always' || url.searchParams.has('captcha')
@@ -264,15 +300,51 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       const sessionToken = requestCookies.get(SESSION_COOKIE)
       if (req.method === 'POST' && url.pathname === '/auth/logout') {
         ctx.authCenter.logout(sessionToken)
-        redirect(res, '/auth/login', { 'set-cookie': cookie(SESSION_COOKIE, '', { secure: config.secureCookie, maxAge: 0 }) })
+        const clear = cookie(SESSION_COOKIE, '', { secure: config.secureCookie, maxAge: 0 })
+        if (req.headers['x-dsh-auth-request'] === '1') writeJson(res, 204, undefined, { 'set-cookie': clear })
+        else redirect(res, '/auth/login', { 'set-cookie': clear })
         return
       }
-      if (!await ctx.authCenter.bypasses(sourceIp) && await ctx.authCenter.session(sessionToken) === undefined) {
+      const principal = await ctx.authCenter.session(sessionToken)
+      const bypassed = await ctx.authCenter.bypasses(sourceIp)
+      if (principal === undefined && !bypassed) {
         if (req.method === 'GET' && (req.headers.accept ?? '').includes('text/html')) redirect(res, '/auth/login')
         else {
-          res.writeHead(401, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-          res.end('{"error":"authentication required"}')
+          writeJson(res, 401, { error: 'authentication required' })
         }
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/auth/account') {
+        writeJson(res, 200, principal === undefined
+          ? { mode: 'whitelist' }
+          : { mode: 'session', provider: principal.provider, username: principal.username })
+        return
+      }
+      if (req.method === 'POST' && url.pathname === '/auth/account/password') {
+        if (req.headers['x-dsh-auth-request'] !== '1') {
+          writeJson(res, 403, { error: 'auth request header required' })
+          return
+        }
+        if (principal === undefined) {
+          writeJson(res, 403, { error: 'password changes require an authenticated account session' })
+          return
+        }
+        const body = await readJson(req)
+        if (typeof body.currentPassword !== 'string' || typeof body.newPassword !== 'string' || body.newPassword.length === 0) {
+          writeJson(res, 422, { error: 'currentPassword and a non-empty newPassword are required' })
+          return
+        }
+        const result = await ctx.authCenter.changePassword(principal, body.currentPassword, body.newPassword)
+        if (result === 'invalid-current') {
+          writeJson(res, 403, { error: 'current password is invalid' })
+          return
+        }
+        if (result === 'unsupported') {
+          writeJson(res, 409, { error: 'this authentication provider does not support password changes' })
+          return
+        }
+        ctx.authCenter.logout(sessionToken)
+        writeJson(res, 204, undefined, { 'set-cookie': cookie(SESSION_COOKIE, '', { secure: config.secureCookie, maxAge: 0 }) })
         return
       }
       proxyHttp(req, res, ctx.webServer.port, sourceIp)

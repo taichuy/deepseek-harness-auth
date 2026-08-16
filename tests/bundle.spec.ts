@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('installable dsh bundle', () => {
@@ -6,16 +6,21 @@ describe('installable dsh bundle', () => {
     const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
       name: string
       version: string
-      dsh?: { bundle?: { patch?: string } }
+      dsh?: { bundle?: { patch?: string }; client?: { inject?: string[]; platform?: string } }
       bin?: Record<string, string>
       exports?: Record<string, unknown>
     }
     expect(manifest.name).toBe('deepseek-harness-auth')
     expect(manifest.version).toMatch(/^\d+\.\d+\.\d+/)
     expect(manifest.dsh?.bundle?.patch).toBe('./cordis.patch.yml')
+    expect(manifest.dsh?.client?.platform).toBe('web')
+    expect(manifest.dsh?.client?.inject).toContain('@deepseek-ai/dsh-client-ui-sidebar')
+    expect(manifest.dsh?.client?.inject).toContain('@deepseek-ai/dsh-client-ui-settings')
     expect(manifest.bin?.['dsh-auth']).toBe('lib/cli.js')
     expect(manifest.exports).toHaveProperty('./center')
     expect(manifest.exports).toHaveProperty('./password')
+    expect(manifest.exports).toHaveProperty('./client')
+    await expect(access(new URL('../lib/client.js', import.meta.url))).resolves.toBeUndefined()
 
     const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
     expect(patch).toContain('- id: directory-picker\n  disabled: true')

@@ -19,6 +19,8 @@ Browser -> public Auth Proxy -> authenticated -> 127.0.0.1:<random> Harness WebS
 - 默认连续失败 6 次锁定 30 秒，同时按“IP + 用户名”和全局 IP 计数。
 - 支持关闭验证码、始终验证、失败后验证；验证码短期有效且只能使用一次。
 - 浏览器仅持有 HttpOnly、SameSite=Strict 的随机会话 token；账号、密码或白名单修改会撤销旧会话。
+- Web 客户端在侧边栏底部提供退出登录，在设置中提供“账号与安全”页面；修改密码必须先验证当前密码，IP 白名单放行本身不能修改凭据。
+- 登录页会读取同一浏览器最近一次已认证 Harness 页面保存的安全主题快照，复用 `--dsw-*` 配色和页面背景。新浏览器首次访问尚无快照时使用随系统明暗变化的 Harness 风格默认主题。
 - 代理只接受 loopback Harness 上游，并把通过认证的上游 Host 与 Origin 改写为 loopback authority，使 Harness 的本机敏感 RPC 在认证后可用。
 - HTTP 与 HTTPS 都可以使用。插件不会强制 TLS；`secureCookie` 由部署者选择。
 
@@ -100,6 +102,14 @@ dsh web
 
 登录所需的 `/auth/login` 与 `/auth/captcha` 是未认证公共端点。其余请求未命中 IP 白名单且没有有效会话时统一拒绝；HTML navigation 重定向到登录页，API 返回 401，WebSocket upgrade 返回 401。
 
+认证后的客户端还使用以下同源端点：
+
+- `GET /auth/account`：返回账号会话或 IP 白名单访问方式。
+- `POST /auth/account/password`：验证当前密码并修改新密码，成功后撤销全部会话；只接受账号会话和带 `X-DSH-Auth-Request: 1` 的 JSON 请求。
+- `POST /auth/logout`：撤销当前会话并清理 Cookie。
+
+登录页本身不能在未认证前读取 Harness 的受保护设置，因此任意第三方皮肤只能在该浏览器至少成功进入过一次 Harness 后同步到后续登录页；这不会为了主题展示而开放 Harness API。
+
 ## 开发与验证
 
 ```bash
@@ -108,7 +118,7 @@ pnpm install
 pnpm run check
 ```
 
-测试覆盖密码状态、权限、IP/CIDR、验证码、失败锁定、会话撤销、白名单热更新、HTTP 代理、Host 改写和 upgrade 拒绝。
+测试覆盖密码状态、权限、Web 密码修改、IP/CIDR、验证码、失败锁定、会话撤销、白名单热更新、登录主题脚本、客户端 Bundle、HTTP 代理、Host 改写和 upgrade 拒绝。
 
 ## 版本与 npm 发布
 

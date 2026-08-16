@@ -107,7 +107,12 @@ describe('authenticated proxy composition', () => {
     expect(page.headers.get('location')).toBe('/auth/login')
     const loginPage = await fetch(`${target.base}/auth/login`)
     expect(loginPage.headers.get('content-security-policy')).toContain("default-src 'none'")
+    expect(loginPage.headers.get('content-security-policy')).toContain("script-src 'self'")
     expect(await loginPage.text()).toContain('DeepSeek Harness')
+    const themeScript = await fetch(`${target.base}/auth/login-theme.js`)
+    expect(themeScript.status).toBe(200)
+    expect(themeScript.headers.get('content-type')).toContain('text/javascript')
+    expect(await themeScript.text()).toContain('dsh-auth-theme-v1')
 
     const login = await fetch(`${target.base}/auth/login`, {
       method: 'POST',
@@ -120,6 +125,56 @@ describe('authenticated proxy composition', () => {
     expect(target.upstream.path).toBe('/api/session.list')
     expect(target.upstream.host).toMatch(/^127\.0\.0\.1:\d+$/)
     expect(target.upstream.origin).toBe(`http://${target.upstream.host ?? ''}`)
+  })
+
+  it('exposes account details only after authorization and changes passwords only for a real session', async () => {
+    const target = await fixture()
+    expect((await fetch(`${target.base}/auth/account`)).status).toBe(401)
+
+    await target.store.updateWhitelist(rules => [...rules, '127.0.0.1'])
+    const bypassAccount = await fetch(`${target.base}/auth/account`)
+    expect(await bypassAccount.json()).toEqual({ mode: 'whitelist' })
+    const bypassChange = await fetch(`${target.base}/auth/account/password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-dsh-auth-request': '1' },
+      body: JSON.stringify({ currentPassword: 'Correct-Horse-42!', newPassword: 'new' }),
+    })
+    expect(bypassChange.status).toBe(403)
+    await target.store.updateWhitelist(() => [])
+
+    const login = await fetch(`${target.base}/auth/login`, {
+      method: 'POST',
+      body: new URLSearchParams({ username: 'owner', password: 'Correct-Horse-42!', provider: 'password' }),
+      redirect: 'manual',
+    })
+    const session = sessionCookie(login)
+    expect(await (await fetch(`${target.base}/auth/account`, { headers: { cookie: session } })).json()).toEqual({
+      mode: 'session', provider: 'password', username: 'owner',
+    })
+    const rejected = await fetch(`${target.base}/auth/account/password`, {
+      method: 'POST',
+      headers: { cookie: session, 'content-type': 'application/json', 'x-dsh-auth-request': '1' },
+      body: JSON.stringify({ currentPassword: 'wrong', newPassword: 'new' }),
+    })
+    expect(rejected.status).toBe(403)
+
+    const changed = await fetch(`${target.base}/auth/account/password`, {
+      method: 'POST',
+      headers: { cookie: session, 'content-type': 'application/json', 'x-dsh-auth-request': '1' },
+      body: JSON.stringify({ currentPassword: 'Correct-Horse-42!', newPassword: 'new' }),
+    })
+    expect(changed.status).toBe(204)
+    expect(changed.headers.get('set-cookie')).toContain('Max-Age=0')
+    expect((await fetch(`${target.base}/auth/account`, { headers: { cookie: session } })).status).toBe(401)
+
+    const oldLogin = await fetch(`${target.base}/auth/login`, {
+      method: 'POST', body: new URLSearchParams({ username: 'owner', password: 'Correct-Horse-42!' }), redirect: 'manual',
+    })
+    expect(oldLogin.headers.get('location')).toContain('error=1')
+    const newLogin = await fetch(`${target.base}/auth/login`, {
+      method: 'POST', body: new URLSearchParams({ username: 'owner', password: 'new' }), redirect: 'manual',
+    })
+    expect(newLogin.headers.get('set-cookie')).toContain('dsh_auth_session=')
   })
 
   it('applies whitelist changes live and rejects unauthenticated upgrade handshakes', async () => {

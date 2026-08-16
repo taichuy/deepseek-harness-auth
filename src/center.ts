@@ -1,7 +1,7 @@
 import { randomBytes, randomInt } from 'node:crypto'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type { AuthProvider, AuthPrincipal, LoginResult } from './types.js'
+import type { AuthProvider, AuthPrincipal, LoginResult, PasswordChangeResult } from './types.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -188,6 +188,13 @@ export class AuthCenter extends Service {
   /** Revoke one browser session token. */
   logout(token: string | undefined): void {
     if (token !== undefined) this.sessions.delete(token)
+  }
+
+  /** Change a password through the provider that established the session. */
+  async changePassword(principal: AuthPrincipal, currentPassword: string, newPassword: string): Promise<PasswordChangeResult> {
+    const provider = this.providers.get(principal.provider)
+    if (provider?.changePassword === undefined) return 'unsupported'
+    return await provider.changePassword(principal, currentPassword, newPassword)
   }
 
   private consumeCaptcha(id: string | undefined, answer: string | undefined): boolean {
