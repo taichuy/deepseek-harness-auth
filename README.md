@@ -19,7 +19,7 @@ Browser -> public Auth Proxy -> authenticated -> 127.0.0.1:<random> Harness WebS
 - 默认连续失败 6 次锁定 30 秒，同时按“IP + 用户名”和全局 IP 计数。
 - 支持关闭验证码、始终验证、失败后验证；验证码短期有效且只能使用一次。
 - 浏览器仅持有 HttpOnly、SameSite=Strict 的随机会话 token；账号、密码或白名单修改会撤销旧会话。
-- Web 客户端在侧边栏底部提供退出登录，在设置中提供“账号与安全”页面；修改密码必须先验证当前密码，IP 白名单放行本身不能修改凭据。
+- Web 客户端在侧边栏底部提供退出登录，在设置中提供“账号与安全”页面；账号会话和白名单放行的访问者都可以管理 IP/CIDR 白名单，修改密码仍必须先验证当前密码。
 - 登录页会读取同一浏览器最近一次已认证 Harness 页面保存的安全主题快照，复用 `--dsw-*` 配色和页面背景。新浏览器首次访问尚无快照时使用随系统明暗变化的 Harness 风格默认主题。
 - 公网浏览器明确确认过 Harness 的同一版“内测声明”后，客户端会按完整声明文案在同源 `localStorage` 中记住确认；刷新或重新登录不再重复打扰，声明文案变化时仍会重新展示。
 - 代理只接受 loopback Harness 上游，并把通过认证的上游 Host 与 Origin 改写为 loopback authority，使 Harness 的本机敏感 RPC 在认证后可用。
@@ -106,6 +106,7 @@ dsh web
 认证后的客户端还使用以下同源端点：
 
 - `GET /auth/account`：返回账号会话或 IP 白名单访问方式。
+- `PUT /auth/account/whitelist`：替换内置 provider 的 IP/CIDR 白名单；账号会话或已命中白名单的访问者均可调用，修改后撤销旧会话。
 - `POST /auth/account/password`：验证当前密码并修改新密码，成功后撤销全部会话；只接受账号会话和带 `X-DSH-Auth-Request: 1` 的 JSON 请求。
 - `POST /auth/logout`：撤销当前会话并清理 Cookie。
 

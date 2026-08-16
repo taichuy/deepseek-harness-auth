@@ -134,7 +134,9 @@ describe('authenticated proxy composition', () => {
 
     await target.store.updateWhitelist(rules => [...rules, '127.0.0.1'])
     const bypassAccount = await fetch(`${target.base}/auth/account`)
-    expect(await bypassAccount.json()).toEqual({ mode: 'whitelist' })
+    expect(await bypassAccount.json()).toEqual({
+      mode: 'whitelist', clientIp: '127.0.0.1', whitelistProvider: 'password', whitelist: ['127.0.0.1'],
+    })
     const bypassChange = await fetch(`${target.base}/auth/account/password`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-dsh-auth-request': '1' },
@@ -150,7 +152,7 @@ describe('authenticated proxy composition', () => {
     })
     const session = sessionCookie(login)
     expect(await (await fetch(`${target.base}/auth/account`, { headers: { cookie: session } })).json()).toEqual({
-      mode: 'session', provider: 'password', username: 'owner',
+      mode: 'session', provider: 'password', username: 'owner', clientIp: '127.0.0.1', whitelistProvider: 'password', whitelist: [],
     })
     const rejected = await fetch(`${target.base}/auth/account/password`, {
       method: 'POST',
@@ -176,6 +178,39 @@ describe('authenticated proxy composition', () => {
       method: 'POST', body: new URLSearchParams({ username: 'owner', password: 'new' }), redirect: 'manual',
     })
     expect(newLogin.headers.get('set-cookie')).toContain('dsh_auth_session=')
+  })
+
+  it('lets account sessions and already-whitelisted visitors replace the IP whitelist', async () => {
+    const target = await fixture()
+    await target.store.updateWhitelist(() => ['localhost'])
+
+    const missingHeader = await fetch(`${target.base}/auth/account/whitelist`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rules: ['127.0.0.1'] }),
+    })
+    expect(missingHeader.status).toBe(403)
+
+    const bypassUpdate = await fetch(`${target.base}/auth/account/whitelist`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-dsh-auth-request': '1' },
+      body: JSON.stringify({ rules: ['192.168.1.0/24'] }),
+    })
+    expect(bypassUpdate.status).toBe(200)
+    expect(await bypassUpdate.json()).toEqual({ whitelistProvider: 'password', whitelist: ['192.168.1.0/24'] })
+    expect((await fetch(`${target.base}/auth/account`)).status).toBe(401)
+
+    const login = await fetch(`${target.base}/auth/login`, {
+      method: 'POST', body: new URLSearchParams({ username: 'owner', password: 'Correct-Horse-42!' }), redirect: 'manual',
+    })
+    const session = sessionCookie(login)
+    const sessionUpdate = await fetch(`${target.base}/auth/account/whitelist`, {
+      method: 'PUT',
+      headers: { cookie: session, 'content-type': 'application/json', 'x-dsh-auth-request': '1' },
+      body: JSON.stringify({ rules: ['localhost', '10.0.0.0/24', '10.0.0.0/24'] }),
+    })
+    expect(sessionUpdate.status).toBe(200)
+    expect(sessionUpdate.headers.get('set-cookie')).toContain('Max-Age=0')
+    expect(await sessionUpdate.json()).toEqual({ whitelistProvider: 'password', whitelist: ['127.0.0.0/8', '10.0.0.0/24'] })
+    expect((await target.store.read())?.whitelist).toEqual(['127.0.0.0/8', '10.0.0.0/24'])
   })
 
   it('applies whitelist changes live and rejects unauthenticated upgrade handshakes', async () => {

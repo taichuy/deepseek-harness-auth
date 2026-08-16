@@ -45,6 +45,16 @@ export function apply(ctx: Context, config: Config): void {
       await store.reset(state.username, newPassword)
       return 'ok'
     },
+    getIpWhitelist: async (principal) => {
+      const state = await store.read()
+      if (state === undefined || (principal !== undefined && (principal.provider !== 'password' || principal.username !== state.username))) return undefined
+      return [...state.whitelist]
+    },
+    replaceIpWhitelist: async (rules, principal) => {
+      const state = await store.read()
+      if (state === undefined || (principal !== undefined && (principal.provider !== 'password' || principal.username !== state.username))) return undefined
+      return [...(await store.updateWhitelist(() => rules)).whitelist]
+    },
   }
   ctx.effect(() => ctx.authCenter.register(provider), 'auth-password: provider')
 }

@@ -197,6 +197,38 @@ export class AuthCenter extends Service {
     return await provider.changePassword(principal, currentPassword, newPassword)
   }
 
+  /** Resolve the whitelist owned by the authenticated or bypassing provider. */
+  async ipWhitelist(principal: AuthPrincipal | undefined, clientIp: string): Promise<{ provider: string; rules: string[] } | undefined> {
+    if (principal !== undefined) {
+      const provider = this.providers.get(principal.provider)
+      const rules = await provider?.getIpWhitelist?.(principal)
+      return rules === undefined ? undefined : { provider: principal.provider, rules }
+    }
+    for (const provider of this.providers.values()) {
+      if (provider.getIpWhitelist !== undefined && await provider.bypasses(clientIp)) {
+        const rules = await provider.getIpWhitelist()
+        if (rules !== undefined) return { provider: provider.id, rules }
+      }
+    }
+    return undefined
+  }
+
+  /** Replace the whitelist through the provider that authorized this request. */
+  async replaceIpWhitelist(principal: AuthPrincipal | undefined, clientIp: string, rules: string[]): Promise<{ provider: string; rules: string[] } | undefined> {
+    if (principal !== undefined) {
+      const provider = this.providers.get(principal.provider)
+      const updated = await provider?.replaceIpWhitelist?.(rules, principal)
+      return updated === undefined ? undefined : { provider: principal.provider, rules: updated }
+    }
+    for (const provider of this.providers.values()) {
+      if (provider.replaceIpWhitelist !== undefined && await provider.bypasses(clientIp)) {
+        const updated = await provider.replaceIpWhitelist(rules)
+        if (updated !== undefined) return { provider: provider.id, rules: updated }
+      }
+    }
+    return undefined
+  }
+
   private consumeCaptcha(id: string | undefined, answer: string | undefined): boolean {
     if (id === undefined || answer === undefined) return false
     const challenge = this.captchas.get(id)

@@ -2,6 +2,10 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## 0.3.0 - 2026-08-16
+
+- Add Web management for IP/CIDR login bypass rules in Account & Security, available to account sessions and already-whitelisted visitors.
+
 ## 0.2.1 - 2026-08-16
 
 - Capture body-scoped skin variables and allow embedded or remote login background images under CSP.

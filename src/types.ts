@@ -28,6 +28,10 @@ export interface AuthProvider {
   authenticate(credentials: AuthCredentials): Promise<AuthPrincipal | undefined>
   /** Replace the current account password after re-authenticating the principal. */
   changePassword?(principal: AuthPrincipal, currentPassword: string, newPassword: string): Promise<PasswordChangeResult>
+  /** Return provider-owned IP/CIDR login bypass rules. */
+  getIpWhitelist?(principal?: AuthPrincipal): Promise<string[] | undefined>
+  /** Replace provider-owned IP/CIDR login bypass rules. */
+  replaceIpWhitelist?(rules: string[], principal?: AuthPrincipal): Promise<string[] | undefined>
 }
 
 /** Provider-owned result of an authenticated password change. */

@@ -315,9 +315,35 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         return
       }
       if (req.method === 'GET' && url.pathname === '/auth/account') {
+        const whitelist = await ctx.authCenter.ipWhitelist(principal, sourceIp)
         writeJson(res, 200, principal === undefined
-          ? { mode: 'whitelist' }
-          : { mode: 'session', provider: principal.provider, username: principal.username })
+          ? { mode: 'whitelist', clientIp: sourceIp, whitelistProvider: whitelist?.provider, whitelist: whitelist?.rules ?? [] }
+          : { mode: 'session', provider: principal.provider, username: principal.username, clientIp: sourceIp, whitelistProvider: whitelist?.provider, whitelist: whitelist?.rules ?? [] })
+        return
+      }
+      if (req.method === 'PUT' && url.pathname === '/auth/account/whitelist') {
+        if (req.headers['x-dsh-auth-request'] !== '1') {
+          writeJson(res, 403, { error: 'auth request header required' })
+          return
+        }
+        const body = await readJson(req)
+        if (!Array.isArray(body.rules) || body.rules.length > 256 || !body.rules.every(rule => typeof rule === 'string' && rule.length > 0 && rule.length <= 128)) {
+          writeJson(res, 422, { error: 'rules must be an array of up to 256 non-empty IP or CIDR strings' })
+          return
+        }
+        try {
+          const updated = await ctx.authCenter.replaceIpWhitelist(principal, sourceIp, body.rules as string[])
+          if (updated === undefined) {
+            writeJson(res, 409, { error: 'the active authentication provider does not expose an IP whitelist' })
+            return
+          }
+          ctx.authCenter.logout(sessionToken)
+          writeJson(res, 200, { whitelistProvider: updated.provider, whitelist: updated.rules }, {
+            'set-cookie': cookie(SESSION_COOKIE, '', { secure: config.secureCookie, maxAge: 0 }),
+          })
+        } catch (error) {
+          writeJson(res, 422, { error: error instanceof Error ? error.message : String(error) })
+        }
         return
       }
       if (req.method === 'POST' && url.pathname === '/auth/account/password') {
