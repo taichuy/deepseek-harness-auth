@@ -142,11 +142,74 @@ function redirect(res: ServerResponse, location: string, headers?: Record<string
   res.end()
 }
 
-function upstreamHeaders(req: IncomingMessage, upstreamAuthority: string, sourceIp: string, upgrade: boolean): IncomingHttpHeaders {
+/** Minimal face of the host browser-auth service (dsh-client-connection, 0.1.2 gate era). */
+interface HostConnection {
+  /** Root URL carrying this activation's launch token as its sole auth input. */
+  authenticatedUrl(baseUrl: string): string
+}
+
+/**
+ * Probe the host browser-auth connection service without declaring it in `inject`:
+ * hosts before the 0.1.2 browser-auth gate do not provide a `connection` service, and
+ * a strict `inject` entry would leave this plugin pending forever on them.
+ */
+function resolveHostConnection(ctx: Context): HostConnection | undefined {
+  const weakGet = (ctx as unknown as { get?(name: string): unknown }).get
+  if (typeof weakGet !== 'function') return undefined
+  try {
+    const connection: unknown = weakGet.call(ctx, 'connection')
+    if (typeof (connection as HostConnection | undefined)?.authenticatedUrl !== 'function') return undefined
+    return connection as HostConnection
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Redeem the host's browser-auth launch token for the authority-bound upstream cookie.
+ * The 0.1.2 host gates WebServer index requests behind a signed cookie minted from the
+ * launch token carried by `/?token=`; the proxy forwards with a fixed loopback authority,
+ * so one successful redemption authenticates every forwarded request for this activation.
+ * Returns undefined when the host predates the gate (nothing to redeem) or when the
+ * redemption failed this time (the caller forwards unauthenticated and retries later).
+ */
+async function redeemHostCookie(port: number, connection: HostConnection | undefined): Promise<string | undefined> {
+  if (connection === undefined) return undefined
+  const authority = `127.0.0.1:${String(port)}`
+  let token: string | undefined
+  try {
+    token = new URL(connection.authenticatedUrl(`http://${authority}`)).searchParams.get('token') ?? undefined
+  } catch {
+    return undefined
+  }
+  if (token === undefined) return undefined
+  return await new Promise<string | undefined>(resolve => {
+    const upstream = httpRequest({
+      agent: false,
+      host: '127.0.0.1',
+      port,
+      method: 'GET',
+      path: `/?token=${encodeURIComponent(token)}`,
+      headers: { host: authority },
+    }, response => {
+      const raw = response.headers['set-cookie']?.[0]
+      const end = raw === undefined ? -1 : raw.indexOf(';')
+      response.resume()
+      resolve(end > 0 ? raw!.slice(0, end) : undefined)
+    })
+    upstream.once('error', () => resolve(undefined))
+    upstream.end()
+  })
+}
+
+function upstreamHeaders(req: IncomingMessage, upstreamAuthority: string, sourceIp: string, upgrade: boolean, hostCookie: string | undefined): IncomingHttpHeaders {
   const headers: IncomingHttpHeaders = { ...req.headers, host: upstreamAuthority }
   const remainingCookies = stripPrivateCookies(req.headers.cookie)
-  if (remainingCookies === undefined) delete headers.cookie
-  else headers.cookie = remainingCookies
+  const upstreamCookie = hostCookie === undefined
+    ? remainingCookies
+    : remainingCookies === undefined ? hostCookie : `${hostCookie}; ${remainingCookies}`
+  if (upstreamCookie === undefined) delete headers.cookie
+  else headers.cookie = upstreamCookie
   delete headers['x-forwarded-for']
   delete headers['x-forwarded-host']
   delete headers['x-forwarded-proto']
@@ -171,7 +234,7 @@ function failBadGateway(res: ServerResponse): void {
   res.destroy()
 }
 
-function proxyHttp(req: IncomingMessage, res: ServerResponse, port: number, sourceIp: string): void {
+function proxyHttp(req: IncomingMessage, res: ServerResponse, port: number, sourceIp: string, hostCookie: string | undefined): void {
   const authority = `127.0.0.1:${String(port)}`
   let upstreamResponse: IncomingMessage | undefined
   const upstream = httpRequest({
@@ -180,7 +243,7 @@ function proxyHttp(req: IncomingMessage, res: ServerResponse, port: number, sour
     port,
     method: req.method,
     path: req.url,
-    headers: upstreamHeaders(req, authority, sourceIp, false),
+    headers: upstreamHeaders(req, authority, sourceIp, false, hostCookie),
   }, (response) => {
     upstreamResponse = response
     response.once('error', () => failBadGateway(res))
@@ -211,7 +274,7 @@ function rejectUpgrade(socket: Duplex, status = 401, message = 'Unauthorized'): 
   socket.end(`HTTP/1.1 ${String(status)} ${message}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
 }
 
-function proxyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, port: number, sourceIp: string, ownedSockets: Set<Duplex>): void {
+function proxyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, port: number, sourceIp: string, ownedSockets: Set<Duplex>, hostCookie: string | undefined): void {
   const authority = `127.0.0.1:${String(port)}`
   const upstream = httpRequest({
     agent: false,
@@ -219,7 +282,7 @@ function proxyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, port: 
     port,
     method: req.method,
     path: req.url,
-    headers: upstreamHeaders(req, authority, sourceIp, true),
+    headers: upstreamHeaders(req, authority, sourceIp, true, hostCookie),
   })
   upstream.on('upgrade', (response, upstreamSocket, upstreamHead) => {
     ownedSockets.add(upstreamSocket)
@@ -260,6 +323,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('auth-proxy: publicBaseUrl must use http or https')
     publicBaseUrl = parsed.href.replace(/\/$/, '')
   }
+  let hostCookie: string | undefined
+  let hostCookieFailureLogged = false
+
   const server = createServer((req, res) => {
     void (async () => {
       const sourceIp = clientIp(req, trustedProxies)
@@ -421,7 +487,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         writeJson(res, 204, undefined, { 'set-cookie': cookie(SESSION_COOKIE, '', { secure: config.secureCookie, maxAge: 0 }) })
         return
       }
-      proxyHttp(req, res, ctx.webServer.port, sourceIp)
+      if (hostCookie === undefined) {
+        hostCookie = await redeemHostCookie(ctx.webServer.port, resolveHostConnection(ctx))
+        if (hostCookie === undefined && !hostCookieFailureLogged) {
+          hostCookieFailureLogged = true
+          ctx.logger.warn(new Error('auth-proxy: upstream browser-auth cookie not redeemed yet; proxied requests may be rejected with 401 until it lands'))
+        }
+      }
+      proxyHttp(req, res, ctx.webServer.port, sourceIp, hostCookie)
     })().catch((error: unknown) => {
       ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
       if (res.destroyed || res.writableEnded) return
@@ -447,7 +520,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         rejectUpgrade(socket)
         return
       }
-      proxyUpgrade(req, socket, head, ctx.webServer.port, sourceIp, upgradedSockets)
+      if (hostCookie === undefined) hostCookie = await redeemHostCookie(ctx.webServer.port, resolveHostConnection(ctx))
+      proxyUpgrade(req, socket, head, ctx.webServer.port, sourceIp, upgradedSockets, hostCookie)
     })().catch(() => rejectUpgrade(socket, 400, 'Bad Request'))
   })
 

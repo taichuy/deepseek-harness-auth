@@ -2,6 +2,10 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## 0.4.2 - 2026-09-08
+
+- Adapt to the 0.1.2 host browser-auth gate: WebServer index requests now require a signed, authority-bound cookie minted from the `dsh web` launch token, so proxied requests without it were rejected with 401. The proxy now redeems that cookie from the host `connection` service at first forward and attaches it to every HTTP and WebSocket upstream request (probed weakly, so hosts before the gate keep working unchanged).
+
 ## 0.4.1 - 2026-08-16
 
 - Keep the public proxy alive when clients or the Harness upstream reset HTTP connections.
