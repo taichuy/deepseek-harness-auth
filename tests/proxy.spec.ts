@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -26,7 +27,12 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
-async function fixture(): Promise<{ base: string; store: AuthStateStore; upstream: { host?: string; origin?: string; path?: string } }> {
+/** Name the upstream gives its authority-bound browser cookie. */
+function upstreamCookieName(port: number): string {
+  return `dsh-auth-${createHash('sha256').update(`127.0.0.1:${String(port)}`).digest('base64url')}`
+}
+
+async function fixture(options: { authenticatedUrlToken?: string } = {}): Promise<{ base: string; store: AuthStateStore; upstream: { host?: string; origin?: string; path?: string }; upstreamPort: number }> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-auth-proxy-'))
   roots.push(root)
   const store = new AuthStateStore(join(root, 'auth'))
@@ -66,6 +72,11 @@ async function fixture(): Promise<{ base: string; store: AuthStateStore; upstrea
   const ctx = new Context()
   contexts.push(ctx)
   ctx.provide('webServer', { host: '127.0.0.1', port: address.port } as never)
+  if (options.authenticatedUrlToken !== undefined) {
+    ctx.provide('connection', {
+      authenticatedUrl: (baseUrl: string) => `${baseUrl}/?token=${options.authenticatedUrlToken ?? ''}`,
+    } as never)
+  }
   await ctx.plugin(AuthCenter, {
     maxAttempts: 6,
     lockSeconds: 30,
@@ -77,7 +88,7 @@ async function fixture(): Promise<{ base: string; store: AuthStateStore; upstrea
   vi.spyOn(console, 'log').mockImplementation(() => {})
   await ctx.plugin(Proxy, { host: '127.0.0.1', port: 0, secureCookie: false, trustedProxies: [] })
   if (ctx.authProxy === undefined) throw new Error('proxy did not bind')
-  return { base: `http://127.0.0.1:${String(ctx.authProxy.port)}`, store, upstream: observed }
+  return { base: `http://127.0.0.1:${String(ctx.authProxy.port)}`, store, upstream: observed, upstreamPort: address.port }
 }
 
 function sessionCookie(response: Response): string {
@@ -85,6 +96,16 @@ function sessionCookie(response: Response): string {
   const match = /dsh_auth_session=([^;]+)/.exec(header)
   if (match?.[1] === undefined) throw new Error('session cookie missing')
   return `dsh_auth_session=${match[1]}`
+}
+
+/**
+ * Stub the fail-closed exit so a test can observe it.
+ *
+ * The proxy calls `process.exit(1)` and then throws, so the same assertion that
+ * kills a careless process in production still surfaces as a rejection here.
+ */
+function stubbedFatalExit(): ReturnType<typeof vi.spyOn> {
+  return vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
 }
 
 async function upgrade(base: string, session?: string): Promise<{ socket: ReturnType<typeof connect>; response: string }> {
@@ -135,6 +156,37 @@ describe('authenticated proxy composition', () => {
     expect(target.upstream.path).toBe('/api/session.list')
     expect(target.upstream.host).toMatch(/^127\.0\.0\.1:\d+$/)
     expect(target.upstream.origin).toBe(`http://${target.upstream.host ?? ''}`)
+  })
+
+  it('completes the upstream browser-login exchange for an index request that carries no upstream cookie', async () => {
+    const target = await fixture({ authenticatedUrlToken: 'test-token' })
+    const login = await fetch(`${target.base}/auth/login`, {
+      method: 'POST',
+      body: new URLSearchParams({ username: 'owner', password: 'Correct-Horse-42!', provider: 'password' }),
+      redirect: 'manual',
+    })
+    const session = sessionCookie(login)
+    const headers = { cookie: session, accept: 'text/html' }
+
+    // Harness only prints its exchange URL to the local console and this proxy
+    // rewrites every upstream Host to the loopback authority, so a remote browser
+    // cannot reach it. The proxy has to ask on the browser's behalf, otherwise the
+    // browser is left with "dsh web authentication required".
+    const exchanged = await fetch(`${target.base}/`, { headers, redirect: 'manual' })
+    expect(exchanged.status).toBe(200)
+    expect(target.upstream.path).toBe('/?token=test-token')
+
+    // Holding the upstream cookie, the index is proxied untouched.
+    const authorized = await fetch(`${target.base}/`, {
+      headers: { ...headers, cookie: `${session}; ${upstreamCookieName(target.upstreamPort)}=stub` },
+      redirect: 'manual',
+    })
+    expect(authorized.status).toBe(200)
+    expect(target.upstream.path).toBe('/')
+
+    // An index request already carrying the token never becomes a second exchange.
+    await fetch(`${target.base}/?token=test-token`, { headers, redirect: 'manual' })
+    expect(target.upstream.path).toBe('/?token=test-token')
   })
 
   it('exposes account details only after authorization and changes passwords only for a real session', async () => {
@@ -317,10 +369,41 @@ describe('authenticated proxy composition', () => {
   })
 
   it('refuses a publicly reachable Harness upstream because that would bypass auth', async () => {
+    const exit = stubbedFatalExit()
     const ctx = new Context()
     contexts.push(ctx)
     ctx.provide('webServer', { host: '0.0.0.0', port: 3080 } as never)
     await ctx.plugin(AuthCenter, { maxAttempts: 6, lockSeconds: 30, sessionTtlSeconds: 60, captchaMode: 'off', captchaAfterFailures: 3 })
     await expect(ctx.plugin(Proxy, { host: '127.0.0.1', port: 0, secureCookie: false, trustedProxies: [] })).rejects.toThrow('must bind 127.0.0.1')
+    // Harness would only warn about the failed entry, leaving this profile's own
+    // WebServer reachable on 0.0.0.0 with nothing in front of it.
+    expect(exit).toHaveBeenCalledWith(1)
+  })
+
+  it('stops the process when the public port is already held instead of warning and serving nothing', async () => {
+    const holder = createServer(() => {})
+    upstreams.push(holder)
+    holder.listen(0, '127.0.0.1')
+    await once(holder, 'listening')
+    const held = holder.address()
+    if (typeof held !== 'object' || held === null) throw new Error('holder did not bind')
+
+    const exit = stubbedFatalExit()
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('webServer', { host: '127.0.0.1', port: held.port } as never)
+    await ctx.plugin(AuthCenter, { maxAttempts: 6, lockSeconds: 30, sessionTtlSeconds: 60, captchaMode: 'off', captchaAfterFailures: 3 })
+    await expect(ctx.plugin(Proxy, { host: '127.0.0.1', port: held.port, secureCookie: false, trustedProxies: [] })).rejects.toThrow('address already in use')
+    expect(exit).toHaveBeenCalledWith(1)
+  })
+
+  it('stops the process on a publicBaseUrl it cannot use', async () => {
+    const exit = stubbedFatalExit()
+    const ctx = new Context()
+    contexts.push(ctx)
+    ctx.provide('webServer', { host: '127.0.0.1', port: 0 } as never)
+    await ctx.plugin(AuthCenter, { maxAttempts: 6, lockSeconds: 30, sessionTtlSeconds: 60, captchaMode: 'off', captchaAfterFailures: 3 })
+    await expect(ctx.plugin(Proxy, { host: '127.0.0.1', port: 0, publicBaseUrl: 'ftp://public.example', secureCookie: false, trustedProxies: [] })).rejects.toThrow('must use http or https')
+    expect(exit).toHaveBeenCalledWith(1)
   })
 })

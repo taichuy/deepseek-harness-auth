@@ -183,6 +183,18 @@ dsh web
 
 `DSH_AUTH_CAPTCHA_MODE` 是账号尚未在 Web 页面保存验证码策略时的初始默认值。一旦从“设置 → 账号与安全”保存，选择结果会写入认证状态并在后续重启时优先生效。
 
+### 启动前置条件是致命的
+
+Harness 把「某个可选 entry 没激活」只当成一行 `warning: N entries did not activate` 然后继续启动。对认证代理来说这等于 fail open：拒绝启动的代理会让内层 WebServer 直接暴露，或者让新进程看起来已经就绪、实际由旧监听在应答。因此本 Bundle 的每个启动前置条件不满足时都会打印 `dsh auth: FATAL: ...` 并以退出码 `1` 结束进程：
+
+| 前置条件 | 诊断要点 |
+|---|---|
+| 内部 WebServer 必须绑定 `127.0.0.1` | 报出实际的 `webServer.host`；公网可达的上游会绕过认证 |
+| 公共端口可绑定 | `EADDRINUSE` 时提示占用端口，最常见原因是还有一个旧的 `dsh web` 在跑，可停掉它或改 `DSH_AUTH_PORT` |
+| `DSH_AUTH_PUBLIC_URL` 合法 | URL 无法解析或协议不是 `http`/`https` |
+
+前台运行时进程会直接退出；后台托管时（见 `scripts/node/restart-dsh-web.mjs`）会报 `dsh web exited during startup` 并把日志指向 `$DSH_HOME/logs/dsh-web-background.log`。
+
 ## 认证提供方架构
 
 `deepseek-harness-auth/center` 提供 `ctx.authCenter` 和 provider registry；`deepseek-harness-auth/password` 是当前内置 provider。每种未来认证方式可以作为独立 Cordis row 注册并通过 profile patch 单独挂载、禁用或替换，不需要修改 Auth Proxy。

@@ -2,6 +2,12 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## 0.4.2 - 2026-10-02
+
+- Fail closed on every startup precondition instead of degrading to a Harness warning. Harness treats an optional entry that does not activate as `warning: N entries did not activate` and boots on, so a proxy that merely threw left a profile that looked started: an unresolvable public port kept the old listener answering while the new process reported readiness, and a non-loopback upstream WebServer stayed reachable with nothing in front of it. The proxy now reports the reason and ends the process.
+- Complete Harness's browser-login handshake on the browser's behalf. Harness authenticates its index through a one-shot `/?token=` exchange bound to the request authority and only prints that URL to the local console, so behind this proxy — which rewrites every upstream Host to the loopback authority — a remote browser was refused with `dsh web authentication required` however it signed in. The proxy now replays the exchange whenever an index request arrives without the upstream's browser cookie, so a remote visitor needs only the password.
+- Drop `@deepseek-ai/dsh-client-runtime` from `dsh.client.inject`. That package no longer ships with Harness, and a stale dependency kept the client half pending, leaving the sidebar sign-out action and the Account & Security settings section unmounted.
+
 ## 0.4.1 - 2026-08-16
 
 - Keep the public proxy alive when clients or the Harness upstream reset HTTP connections.

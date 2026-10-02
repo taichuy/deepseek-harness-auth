@@ -3,6 +3,8 @@
  * The upstream Harness carrier remains loopback-only; every public HTTP, SSE,
  * and WebSocket request crosses this plugin before reaching it.
  */
+import { createHash } from 'node:crypto'
+import { writeSync } from 'node:fs'
 import { createServer, request as httpRequest } from 'node:http'
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -76,6 +78,56 @@ function stripPrivateCookies(value: string | undefined): string | undefined {
     return key !== SESSION_COOKIE && key !== CAPTCHA_COOKIE
   })
   return kept.length === 0 ? undefined : kept.join('; ')
+}
+
+/**
+ * Name of the upstream's authority-bound browser cookie.
+ *
+ * Harness signs that cookie against the request authority and keys it by the
+ * raw SHA-256 digest, base64url encoded without padding.
+ */
+function coreCookieName(authority: string): string {
+  return `dsh-auth-${createHash('sha256').update(authority).digest('base64url')}`
+}
+
+/**
+ * Read Harness's per-process browser-login token.
+ *
+ * `authenticatedUrl` is the only public surface that exposes the token, and the
+ * upstream memoizes it per process, so one read serves every request. Returns
+ * undefined when the running Harness build offers no such exchange, in which
+ * case the proxy leaves index requests alone.
+ */
+function coreLaunchToken(ctx: Context): string | undefined {
+  const connection = ctx.get('connection') as { authenticatedUrl?: (baseUrl: string) => string } | undefined
+  if (typeof connection?.authenticatedUrl !== 'function') return undefined
+  try {
+    return new URL(connection.authenticatedUrl('http://127.0.0.1')).searchParams.get('token') ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Upstream path to request instead of the index, or undefined to proxy the
+ * request as-is.
+ *
+ * Harness authenticates the index through a one-shot `/?token=` exchange that
+ * mints its authority-bound cookie, and it only prints that URL to the local
+ * console — while this proxy rewrites every upstream Host to the loopback
+ * authority, so the printed URL is meaningless from anywhere else. A remote
+ * browser therefore hits `dsh web authentication required` no matter how it
+ * signs in here. Replaying the exchange keeps the operator out of the loop: the
+ * upstream answers with the Set-Cookie plus a redirect back to `/`, and every
+ * later request already carries the cookie.
+ */
+function coreIndexExchange(req: IncomingMessage, port: number, token: () => string | undefined): string | undefined {
+  if (req.method !== 'GET') return undefined
+  const url = new URL(req.url ?? '/', 'http://auth.local')
+  if (url.pathname !== '/' || url.searchParams.has('token')) return undefined
+  if (cookies(req).has(coreCookieName(`127.0.0.1:${String(port)}`))) return undefined
+  const value = token()
+  return value === undefined ? undefined : `/?token=${encodeURIComponent(value)}`
 }
 
 function clientIp(req: IncomingMessage, trustedProxies: readonly string[]): string {
@@ -171,7 +223,7 @@ function failBadGateway(res: ServerResponse): void {
   res.destroy()
 }
 
-function proxyHttp(req: IncomingMessage, res: ServerResponse, port: number, sourceIp: string): void {
+function proxyHttp(req: IncomingMessage, res: ServerResponse, port: number, sourceIp: string, path?: string): void {
   const authority = `127.0.0.1:${String(port)}`
   let upstreamResponse: IncomingMessage | undefined
   const upstream = httpRequest({
@@ -179,7 +231,7 @@ function proxyHttp(req: IncomingMessage, res: ServerResponse, port: number, sour
     host: '127.0.0.1',
     port,
     method: req.method,
-    path: req.url,
+    path: path ?? req.url,
     headers: upstreamHeaders(req, authority, sourceIp, false),
   }, (response) => {
     upstreamResponse = response
@@ -248,18 +300,57 @@ function proxyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, port: 
   upstream.end()
 }
 
+/**
+ * Stop the process when the proxy cannot enforce authentication.
+ *
+ * Harness records a failed optional entry and boots on: the operator gets one
+ * `warning: N entries did not activate` line and a profile that looks started.
+ * For this bundle that is fail-open rather than fail-closed — a refused proxy
+ * leaves the inner WebServer reachable with nothing in front of it — so every
+ * startup precondition ends the process instead of degrading to a warning.
+ */
+function abortStartup(message: string): never {
+  // writeSync, not console.error: process.exit() drops writes a pipe has not
+  // flushed yet, and this line is the only account of why the profile stopped.
+  writeSync(2, `dsh auth: FATAL: ${message}\n`)
+  process.exit(1)
+  // Tests stub process.exit to observe the failure; keep it visible when that
+  // stub returns, and keep this function's `never` honest either way.
+  throw new Error(`auth-proxy: ${message}`)
+}
+
 /** Mount the authenticated public listener in front of the loopback Harness carrier. */
 export async function apply(ctx: Context, config: Config): Promise<void> {
   if (ctx.webServer.host !== '127.0.0.1') {
-    throw new Error('auth-proxy: the upstream Harness webserver must bind 127.0.0.1; a public upstream would bypass authentication')
+    abortStartup(`the upstream Harness webserver must bind 127.0.0.1 but is on ${ctx.webServer.host}; a public upstream would bypass authentication`)
   }
   const trustedProxies = config.trustedProxies.map(normalizeIpRule)
   let publicBaseUrl: string | undefined
   if (config.publicBaseUrl !== undefined && config.publicBaseUrl !== '') {
-    const parsed = new URL(config.publicBaseUrl)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('auth-proxy: publicBaseUrl must use http or https')
+    let parsed: URL
+    try {
+      parsed = new URL(config.publicBaseUrl)
+    } catch {
+      abortStartup(`publicBaseUrl is not a valid URL: ${config.publicBaseUrl}`)
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') abortStartup(`publicBaseUrl must use http or https, received ${parsed.protocol}`)
     publicBaseUrl = parsed.href.replace(/\/$/, '')
   }
+  let cachedToken: string | undefined
+  let announcedExchange = false
+  /** Resolve the upstream browser-login token, then reuse it for the process. */
+  const launchToken = (): string | undefined => cachedToken ?? (cachedToken = coreLaunchToken(ctx))
+  // Announce whether the exchange is wired, so a deployment learns it from the
+  // readiness output rather than from the first remote sign-in failing.
+  ctx.inject(['connection'], () => {
+    if (announcedExchange) return
+    announcedExchange = true
+    if (launchToken() === undefined) {
+      ctx.logger.warn(new Error('auth-proxy: the upstream connection service exposes no authenticatedUrl token; a browser that never completed the loopback login will be refused with "dsh web authentication required"'))
+      return
+    }
+    console.log('dsh auth: upstream browser-login exchange available')
+  })
   const server = createServer((req, res) => {
     void (async () => {
       const sourceIp = clientIp(req, trustedProxies)
@@ -421,7 +512,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         writeJson(res, 204, undefined, { 'set-cookie': cookie(SESSION_COOKIE, '', { secure: config.secureCookie, maxAge: 0 }) })
         return
       }
-      proxyHttp(req, res, ctx.webServer.port, sourceIp)
+      proxyHttp(req, res, ctx.webServer.port, sourceIp, coreIndexExchange(req, ctx.webServer.port, launchToken))
     })().catch((error: unknown) => {
       ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
       if (res.destroyed || res.writableEnded) return
@@ -464,6 +555,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       server.off('error', reject)
       resolve()
     })
+  }).catch((error: unknown) => {
+    const address = `${config.host}:${String(config.port)}`
+    // A held port is the common case by far: the profile is usually restarted
+    // while an older `dsh web` still owns the public listener, and the old
+    // process keeps answering, so the new one must not look like it started.
+    const held = (error as { code?: unknown } | null)?.code === 'EADDRINUSE'
+    abortStartup(held
+      ? `cannot listen on ${address}: address already in use — stop the process holding it (an older \`dsh web\` is the usual cause) or set DSH_AUTH_PORT`
+      : `cannot listen on ${address}: ${error instanceof Error ? error.message : String(error)}`)
   })
   const address = server.address()
   const port = typeof address === 'object' && address !== null ? address.port : config.port
